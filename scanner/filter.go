@@ -12,6 +12,9 @@ type ScanFilter struct {
 }
 
 // Directories to always skip (regardless of flags)
+// NOTE: pub/media/custom_options/ is intentionally NOT skipped - it is a critical
+// PolyShell upload target (pub/media/custom_options/quote/*.php).
+// Attackers upload polyglot files (image header + PHP code) to this directory.
 var skipDirs = map[string]bool{
 	"var/cache":             true,
 	"var/page_cache":        true,

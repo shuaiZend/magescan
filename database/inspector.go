@@ -72,26 +72,50 @@ var dbPatterns = []dbPattern{
 	{regexp.MustCompile(`(?i)document\.forms.*querySelector|querySelector.*(?:cc_number|cc_cid|payment)`), nil, "Payment form field targeting", "Critical"},
 	{regexp.MustCompile(`(?i)btoa\s*\(.*(?:JSON\.stringify|serialize|encodeURI)`), nil, "Data serialization with base64 encoding", "High"},
 	{regexp.MustCompile(`(?i)wss?://[a-z0-9.-]+/(?:common|ws|socket)`), nil, "WebSocket C2 connection", "Critical"},
+	{regexp.MustCompile(`(?i)<script[^>]*>\s*var\s+\w+\s*=\s*['"][a-z0-9]{200,}`), nil, "Script tag with long encoded payload (likely skimmer)", "Critical"},
+	{regexp.MustCompile(`(?i)<script[^>]*>[^<]{500,}`), nil, "Script tag with large inline content (potential obfuscated malware)", "High"},
 }
 
 // sensitivePaths are core_config_data paths that are commonly targeted by attackers.
 var sensitivePaths = []string{
+	// Design paths - most commonly exploited
 	"design/head/includes",
-	"design/footer/absolute_footer",
-	"design/header/welcome",
-	"dev/js/session_storage_key",
-	"web/cookie/cookie_domain",
 	"design/head/scripts",
+	"design/head/default",
+	"design/footer/absolute_footer",
 	"design/footer/includes",
 	"design/footer/before_body_end",
-	"design/head/default",
-	"design/header/default",
 	"design/footer/default",
-	"admin/url/custom",
-	"web/default/front",
-	"catalog/seo/category_url_suffix",
+	"design/header/welcome",
+	"design/header/default",
+	// Payment and checkout paths
 	"checkout/cart/crosssell_disabled",
+	"checkout/payment_section/default_group",
+	// JavaScript/dev paths
+	"dev/js/session_storage_key",
 	"dev/debug/template_hints_storefront",
+	// Web paths
+	"web/cookie/cookie_domain",
+	"web/default/front",
+	"web/unsecure/base_url",
+	"web/secure/base_url",
+	// Admin paths
+	"admin/url/custom",
+	"admin/startup/page",
+	// Email template paths
+	"sales_email/order/template",
+	"sales_email/shipment/template",
+	"sales_email/invoice/template",
+	"contact/email/email_template",
+	// Catalog paths
+	"catalog/seo/category_url_suffix",
+	"catalog/frontend/list_mode",
+	// Shipping (known injection point)
+	"shipping/shipping_policy/shipping_policy_content",
+	// Store information
+	"general/store_information/merchant_vat_number",
+	// System
+	"system/notification/add_notice",
 }
 
 // Inspector performs security scans on the Magento database.
@@ -123,6 +147,8 @@ func (i *Inspector) Scan(ctx context.Context) ([]DBFinding, error) {
 		{"email_template", i.scanEmailTemplates},
 		{"catalog_product_entity_text", i.scanProductText},
 		{"layout_update", i.scanLayoutUpdates},
+		{"sales_order_address", i.scanSalesOrderAddress},
+		{"admin_user", i.scanAdminUsers},
 	}
 
 	for _, sf := range scanFuncs {
@@ -162,7 +188,23 @@ func (i *Inspector) scanCoreConfigData(ctx context.Context) error {
 	}
 
 	query := fmt.Sprintf(
-		"SELECT config_id, path, value FROM %s WHERE path IN (%s) OR path LIKE '%%script%%' OR path LIKE '%%html%%' OR path LIKE '%%design/head%%' OR path LIKE '%%design/footer%%' OR path LIKE '%%design/header%%' OR path LIKE '%%javascript%%'",
+		`SELECT config_id, path, value FROM %s WHERE path IN (%s)
+     OR path LIKE '%%design/%%'
+     OR path LIKE '%%script%%'
+     OR path LIKE '%%html%%'
+     OR path LIKE '%%javascript%%'
+     OR path LIKE '%%payment/%%'
+     OR path LIKE '%%checkout/%%'
+     OR value LIKE '%%<script%%'
+     OR value LIKE '%%<iframe%%'
+     OR value LIKE '%%javascript:%%'
+     OR value LIKE '%%eval(%%'
+     OR value LIKE '%%document.write%%'
+     OR value LIKE '%%onload=%%'
+     OR value LIKE '%%onerror=%%'
+     OR value LIKE '%%String.fromCharCode%%'
+     OR value LIKE '%%atob(%%'
+     OR value LIKE '%%fetch(%%'`,
 		tableName, strings.Join(placeholders, ","),
 	)
 
@@ -559,6 +601,170 @@ func (i *Inspector) scanLayoutUpdates(ctx context.Context) error {
 	}
 
 	i.sendProgress("layout_update", scanned, threats, true)
+	return nil
+}
+
+func (i *Inspector) scanSalesOrderAddress(ctx context.Context) error {
+	tableName := i.conn.TableName("sales_order_address")
+	// Check vat_id and company fields for template injection (CVE-2022-24086)
+	query := fmt.Sprintf(
+		"SELECT entity_id, vat_id, company FROM %s WHERE vat_id LIKE '%%{{%%' OR vat_id LIKE '%%<script%%' OR vat_id LIKE '%%curl%%' OR vat_id LIKE '%%wget%%' OR company LIKE '%%{{%%' OR company LIKE '%%<script%%' ORDER BY entity_id DESC LIMIT 5000",
+		tableName,
+	)
+
+	rows, err := i.conn.db.QueryContext(ctx, query)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+
+	var scanned, threats int64
+	// Template injection patterns specific to CVE-2022-24086
+	templatePatterns := []*regexp.Regexp{
+		regexp.MustCompile(`\{\{.*var.*\}\}`),
+		regexp.MustCompile(`(?i)curl\s+.*-o|wget\s+.*-O`),
+		regexp.MustCompile(`(?i)<script`),
+		regexp.MustCompile(`(?i)base64.*decode|eval\s*\(`),
+		regexp.MustCompile(`(?i)chmod\s+\+x|/bin/bash|/bin/sh`),
+	}
+
+	for rows.Next() {
+		var entityID int64
+		var vatID, company sql.NullString
+
+		if err := rows.Scan(&entityID, &vatID, &company); err != nil {
+			return err
+		}
+		scanned++
+
+		// Check both vat_id and company fields
+		fieldsToCheck := []struct {
+			name  string
+			value sql.NullString
+		}{
+			{"vat_id", vatID},
+			{"company", company},
+		}
+
+		for _, field := range fieldsToCheck {
+			if !field.value.Valid || field.value.String == "" {
+				continue
+			}
+
+			for _, pat := range templatePatterns {
+				if pat.MatchString(field.value.String) {
+					threats++
+					i.findings = append(i.findings, DBFinding{
+						Table:       tableName,
+						RecordID:    entityID,
+						Field:       field.name,
+						Description: "Template variable injection (CVE-2022-24086)",
+						MatchedText: truncate(field.value.String, 200),
+						Severity:    "Critical",
+						RemediateSQL: fmt.Sprintf(
+							"-- CVE-2022-24086 template injection in %s\nUPDATE %s SET %s = '' WHERE entity_id = %d;",
+							field.name, tableName, field.name, entityID),
+					})
+					break
+				}
+			}
+		}
+	}
+
+	if err := rows.Err(); err != nil {
+		return err
+	}
+
+	i.sendProgress("sales_order_address", scanned, threats, true)
+	return nil
+}
+
+func (i *Inspector) scanAdminUsers(ctx context.Context) error {
+	tableName := i.conn.TableName("admin_user")
+	query := fmt.Sprintf("SELECT user_id, username, email, created FROM %s", tableName)
+
+	rows, err := i.conn.db.QueryContext(ctx, query)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+
+	// Known backdoor email patterns
+	knownBadEmails := []string{
+		"klaviyo_support1@proton.me",
+		"indoor@gmai.com",
+		"nonebo@maill.com",
+		"Chronopost@correos.es",
+		"btr12@gmail.com",
+		"support@dba.dk",
+		"rejeki2018@gmail.com",
+		"akshaykamble@mail.com",
+		"welcome@domain.com",
+		"Consulting@mail.com",
+	}
+
+	suspiciousPatterns := []*regexp.Regexp{
+		regexp.MustCompile(`(?i)@(proton\.me|protonmail\.com|tutanota\.com|guerrillamail\.com|tempmail\.com)`),
+		regexp.MustCompile(`(?i)(support|admin|system|root)\d*@`),
+		regexp.MustCompile(`(?i)@gmai\.com$`),
+		regexp.MustCompile(`(?i)@maill\.com$`),
+	}
+
+	var scanned, threats int64
+	for rows.Next() {
+		var userID int64
+		var username, email string
+		var created sql.NullString
+
+		if err := rows.Scan(&userID, &username, &email, &created); err != nil {
+			return err
+		}
+		scanned++
+
+		// Check against known bad emails
+		for _, bad := range knownBadEmails {
+			if strings.EqualFold(email, bad) {
+				threats++
+				i.findings = append(i.findings, DBFinding{
+					Table:       tableName,
+					RecordID:    userID,
+					Field:       "email",
+					Description: "Known backdoor admin account (Sansec)",
+					MatchedText: fmt.Sprintf("username=%s email=%s", username, email),
+					Severity:    "Critical",
+					RemediateSQL: fmt.Sprintf(
+						"-- Known backdoor admin account\nDELETE FROM %s WHERE user_id = %d; -- username: %s",
+						tableName, userID, username),
+				})
+				break
+			}
+		}
+
+		// Check against suspicious patterns
+		for _, pat := range suspiciousPatterns {
+			if pat.MatchString(email) {
+				threats++
+				i.findings = append(i.findings, DBFinding{
+					Table:       tableName,
+					RecordID:    userID,
+					Field:       "email",
+					Description: "Suspicious admin account email pattern",
+					MatchedText: fmt.Sprintf("username=%s email=%s", username, email),
+					Severity:    "High",
+					RemediateSQL: fmt.Sprintf(
+						"-- Verify this admin account is legitimate\n-- SELECT * FROM %s WHERE user_id = %d;",
+						tableName, userID),
+				})
+				break
+			}
+		}
+	}
+
+	if err := rows.Err(); err != nil {
+		return err
+	}
+
+	i.sendProgress("admin_user", scanned, threats, true)
 	return nil
 }
 

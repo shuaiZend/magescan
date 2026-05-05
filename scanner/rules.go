@@ -261,6 +261,11 @@ func getWebShellRules() []Rule {
 			Description: "Supply chain License.php backdoor activation (Sansec)",
 			Regex:       `adminLoadLicense|LicenseApi\.php.*include_once|include_once.*License\.php.*\$_(GET|POST|REQUEST)`, IsRegex: true,
 		},
+		{
+			ID: "WEBSHELL-043", Category: CategoryWebShell, Severity: SeverityCritical,
+			Description: "Polyglot file (image header with PHP code - PolyShell)",
+			Regex:       `(?:GIF89a|PNG).*<\?php`, IsRegex: true,
+		},
 	}
 }
 
