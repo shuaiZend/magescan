@@ -1,4 +1,4 @@
-module github.com/magescan
+module github.com/shuaiZend/magescan
 
 go 1.21
 
