@@ -14,11 +14,11 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/magescan/config"
-	"github.com/magescan/database"
-	"github.com/magescan/resource"
-	"github.com/magescan/scanner"
-	"github.com/magescan/ui"
+	"github.com/shuaiZend/magescan/config"
+	"github.com/shuaiZend/magescan/database"
+	"github.com/shuaiZend/magescan/resource"
+	"github.com/shuaiZend/magescan/scanner"
+	"github.com/shuaiZend/magescan/ui"
 )
 
 const version = "1.0.0"
