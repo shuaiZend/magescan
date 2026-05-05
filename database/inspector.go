@@ -48,6 +48,30 @@ var dbPatterns = []dbPattern{
 	{regexp.MustCompile(`(?i)\bonerror\s*="`), nil, "Onerror event handler injection", "Medium"},
 	{regexp.MustCompile(`(?i)<link[^>]*href\s*=\s*['"]https?://`), regexp.MustCompile(`(?i)(?:googleapis|gstatic|cloudflare|jquery|bootstrapcdn)`), "Suspicious external resource", "Medium"},
 	{regexp.MustCompile(`(?:\.ru|\.cn|\.tk|\.pw|\.top|\.xyz|\.club|\.work|\.buzz)/`), nil, "Suspicious TLD in content", "Medium"},
+	// JS Shell / Magecart patterns from Sansec threat intelligence
+	{regexp.MustCompile(`(?i)<script[^>]*>\s*var\s+\w+\s*=\s*['"]`), nil, "Inline script with variable assignment (potential skimmer)", "High"},
+	{regexp.MustCompile(`(?i)<script[^>]*>.*(?:createElement|appendChild|insertBefore)`), nil, "DOM manipulation in inline script", "High"},
+	{regexp.MustCompile(`(?i)(?:fromCharCode|charCodeAt|String\.fromCharCode)`), nil, "Character code manipulation (JS obfuscation)", "High"},
+	{regexp.MustCompile(`(?i)new\s+Image\(\).*\.src\s*=|\.src\s*=.*new\s+Image`), nil, "Image beacon exfiltration", "Critical"},
+	{regexp.MustCompile(`(?i)navigator\.sendBeacon\(`), nil, "SendBeacon data exfiltration", "Critical"},
+	{regexp.MustCompile(`(?i)(?:window\.)?atob\s*\(`), nil, "Base64 atob decoding in content", "High"},
+	{regexp.MustCompile(`(?i)fetch\s*\(\s*['"]https?://`), nil, "Fetch to external URL", "Critical"},
+	{regexp.MustCompile(`(?i)XMLHttpRequest|\.open\s*\(\s*['"]POST['"]`), nil, "XHR/POST request in content", "Critical"},
+	{regexp.MustCompile(`(?i)<script[^>]*src\s*=\s*['"][^'"]*(?:cdnstatics\.net|js-csp\.com|js-stats\.com|jslibrary\.net|googletagmanager\.eu|jquerycdn\.at|cdn-sources\.com|windlrr\.com|stromao\.com|cloudflare-stat\.net)`), nil, "Known Magecart exfiltration domain (Sansec)", "Critical"},
+	{regexp.MustCompile(`(?i)RTCPeerConnection|createDataChannel`), nil, "WebRTC data channel (CSP bypass skimmer)", "Critical"},
+	{regexp.MustCompile(`(?i)<svg[^>]*onload\s*=`), nil, "SVG onload injection", "Critical"},
+	{regexp.MustCompile(`(?i)document\.cookie.*(?:fetch|XMLHttpRequest|Image|sendBeacon)`), nil, "Cookie theft with exfiltration", "Critical"},
+	{regexp.MustCompile(`(?i)localStorage\.(?:setItem|getItem)\s*\(\s*['"]_mgx_`), nil, "Magecart localStorage indicator", "Critical"},
+	{regexp.MustCompile(`(?i)(?:cardnumber|securitycode|holder|expirationdate)-kao\d+`), nil, "Known Magecart form field naming (Polyovki)", "Critical"},
+	{regexp.MustCompile(`(?i)querySelectorAll\s*\(\s*['"](?:input|form|select|textarea)`), nil, "Form field harvesting", "High"},
+	{regexp.MustCompile(`(?i)(?:checkout|payment|billing).*(?:addEventListener|observe)`), nil, "Checkout page event monitoring", "High"},
+	{regexp.MustCompile(`(?i)GTM-(?:WXN4NCG|N7PP3X2|TC8JJS2|NH2LCRH|MT3XMX7|W8FXL6X5|KQF4P5L|M9Q3LR7|M6DS7C8|55SBK75)`), nil, "Known malicious GTM container (Sansec)", "Critical"},
+	{regexp.MustCompile(`(?i)(?:googleapis\.com|youtube\.com|google\.com)[^'"]*callback\s*=\s*eval`), nil, "JSONP callback eval injection", "Critical"},
+	{regexp.MustCompile(`(?i)parseInt\s*\([^,]+,\s*\d+\).*String\.fromCharCode.*\^`), nil, "Base-N XOR decoding (CosmicSting)", "Critical"},
+	{regexp.MustCompile(`(?i)String\.fromCharCode\.apply\s*\(\s*null\s*,\s*\[`), nil, "fromCharCode.apply array decoding", "High"},
+	{regexp.MustCompile(`(?i)document\.forms.*querySelector|querySelector.*(?:cc_number|cc_cid|payment)`), nil, "Payment form field targeting", "Critical"},
+	{regexp.MustCompile(`(?i)btoa\s*\(.*(?:JSON\.stringify|serialize|encodeURI)`), nil, "Data serialization with base64 encoding", "High"},
+	{regexp.MustCompile(`(?i)wss?://[a-z0-9.-]+/(?:common|ws|socket)`), nil, "WebSocket C2 connection", "Critical"},
 }
 
 // sensitivePaths are core_config_data paths that are commonly targeted by attackers.
@@ -59,6 +83,15 @@ var sensitivePaths = []string{
 	"web/cookie/cookie_domain",
 	"design/head/scripts",
 	"design/footer/includes",
+	"design/footer/before_body_end",
+	"design/head/default",
+	"design/header/default",
+	"design/footer/default",
+	"admin/url/custom",
+	"web/default/front",
+	"catalog/seo/category_url_suffix",
+	"checkout/cart/crosssell_disabled",
+	"dev/debug/template_hints_storefront",
 }
 
 // Inspector performs security scans on the Magento database.
@@ -87,6 +120,9 @@ func (i *Inspector) Scan(ctx context.Context) ([]DBFinding, error) {
 		{"cms_block", i.scanCMSBlocks},
 		{"cms_page", i.scanCMSPages},
 		{"sales_order_status_history", i.scanOrderStatusHistory},
+		{"email_template", i.scanEmailTemplates},
+		{"catalog_product_entity_text", i.scanProductText},
+		{"layout_update", i.scanLayoutUpdates},
 	}
 
 	for _, sf := range scanFuncs {
@@ -126,7 +162,7 @@ func (i *Inspector) scanCoreConfigData(ctx context.Context) error {
 	}
 
 	query := fmt.Sprintf(
-		"SELECT config_id, path, value FROM %s WHERE path IN (%s) OR path LIKE '%%script%%' OR path LIKE '%%html%%'",
+		"SELECT config_id, path, value FROM %s WHERE path IN (%s) OR path LIKE '%%script%%' OR path LIKE '%%html%%' OR path LIKE '%%design/head%%' OR path LIKE '%%design/footer%%' OR path LIKE '%%design/header%%' OR path LIKE '%%javascript%%'",
 		tableName, strings.Join(placeholders, ","),
 	)
 
@@ -359,6 +395,171 @@ func truncate(s string, n int) string {
 		return s
 	}
 	return s[:n] + "..."
+}
+
+func (i *Inspector) scanEmailTemplates(ctx context.Context) error {
+	tableName := i.conn.TableName("email_template")
+	query := fmt.Sprintf("SELECT template_id, template_code, template_text FROM %s", tableName)
+
+	rows, err := i.conn.db.QueryContext(ctx, query)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+
+	var scanned, threats int64
+	for rows.Next() {
+		var templateID int64
+		var templateCode string
+		var content sql.NullString
+
+		if err := rows.Scan(&templateID, &templateCode, &content); err != nil {
+			return err
+		}
+		scanned++
+
+		if !content.Valid || content.String == "" {
+			continue
+		}
+
+		for _, p := range dbPatterns {
+			if p.Pattern.MatchString(content.String) {
+				if p.Exclude != nil && p.Exclude.MatchString(content.String) {
+					continue
+				}
+				threats++
+				i.findings = append(i.findings, DBFinding{
+					Table:       tableName,
+					RecordID:    templateID,
+					Field:       "template_text",
+					Description: p.Description,
+					MatchedText: truncate(content.String, 200),
+					Severity:    p.Severity,
+					RemediateSQL: fmt.Sprintf(
+						"-- Review email template ID %d (%s)\nUPDATE %s SET template_text = '' WHERE template_id = %d;",
+						templateID, templateCode, tableName, templateID),
+				})
+				break
+			}
+		}
+	}
+
+	if err := rows.Err(); err != nil {
+		return err
+	}
+
+	i.sendProgress("email_template", scanned, threats, true)
+	return nil
+}
+
+func (i *Inspector) scanProductText(ctx context.Context) error {
+	tableName := i.conn.TableName("catalog_product_entity_text")
+	query := fmt.Sprintf("SELECT value_id, entity_id, value FROM %s WHERE value LIKE '%%<script%%' OR value LIKE '%%javascript:%%' OR value LIKE '%%eval(%%' OR value LIKE '%%document.write%%' OR value LIKE '%%onload=%%' OR value LIKE '%%onerror=%%'", tableName)
+
+	rows, err := i.conn.db.QueryContext(ctx, query)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+
+	var scanned, threats int64
+	for rows.Next() {
+		var valueID, entityID int64
+		var content sql.NullString
+
+		if err := rows.Scan(&valueID, &entityID, &content); err != nil {
+			return err
+		}
+		scanned++
+
+		if !content.Valid || content.String == "" {
+			continue
+		}
+
+		for _, p := range dbPatterns {
+			if p.Pattern.MatchString(content.String) {
+				if p.Exclude != nil && p.Exclude.MatchString(content.String) {
+					continue
+				}
+				threats++
+				i.findings = append(i.findings, DBFinding{
+					Table:       tableName,
+					RecordID:    entityID,
+					Field:       "value",
+					Description: p.Description,
+					MatchedText: truncate(content.String, 200),
+					Severity:    p.Severity,
+					RemediateSQL: fmt.Sprintf(
+						"-- Review product entity ID %d, value_id %d\n-- SELECT * FROM %s WHERE value_id = %d;",
+						entityID, valueID, tableName, valueID),
+				})
+				break
+			}
+		}
+	}
+
+	if err := rows.Err(); err != nil {
+		return err
+	}
+
+	i.sendProgress("catalog_product_entity_text", scanned, threats, true)
+	return nil
+}
+
+func (i *Inspector) scanLayoutUpdates(ctx context.Context) error {
+	tableName := i.conn.TableName("layout_update")
+	query := fmt.Sprintf("SELECT layout_update_id, handle, xml FROM %s WHERE xml LIKE '%%<script%%' OR xml LIKE '%%javascript%%' OR xml LIKE '%%onload%%' OR xml LIKE '%%<referenceBlock%%'", tableName)
+
+	rows, err := i.conn.db.QueryContext(ctx, query)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+
+	var scanned, threats int64
+	for rows.Next() {
+		var updateID int64
+		var handle string
+		var xml sql.NullString
+
+		if err := rows.Scan(&updateID, &handle, &xml); err != nil {
+			return err
+		}
+		scanned++
+
+		if !xml.Valid || xml.String == "" {
+			continue
+		}
+
+		for _, p := range dbPatterns {
+			if p.Pattern.MatchString(xml.String) {
+				if p.Exclude != nil && p.Exclude.MatchString(xml.String) {
+					continue
+				}
+				threats++
+				i.findings = append(i.findings, DBFinding{
+					Table:       tableName,
+					RecordID:    updateID,
+					Field:       "xml",
+					Path:        handle,
+					Description: p.Description,
+					MatchedText: truncate(xml.String, 200),
+					Severity:    p.Severity,
+					RemediateSQL: fmt.Sprintf(
+						"-- Review layout update ID %d (handle: %s)\nDELETE FROM %s WHERE layout_update_id = %d;",
+						updateID, handle, tableName, updateID),
+				})
+				break
+			}
+		}
+	}
+
+	if err := rows.Err(); err != nil {
+		return err
+	}
+
+	i.sendProgress("layout_update", scanned, threats, true)
+	return nil
 }
 
 // isTableNotFoundError checks if a MySQL error indicates a missing table.
