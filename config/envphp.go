@@ -10,6 +10,8 @@ import (
 // ParseEnvPHP reads and parses the Magento app/etc/env.php file to extract
 // database configuration and table prefix. It handles the nested PHP array
 // structure: 'db' => ['connection' => ['default' => [...]]].
+// Uses scope-aware parsing to avoid matching values from unrelated blocks
+// (e.g., Redis session password vs DB password).
 // Returns DBConfig, table_prefix, and any error encountered.
 func ParseEnvPHP(filePath string) (*DBConfig, string, error) {
 	// Open file read-only for safety
@@ -32,13 +34,28 @@ func ParseEnvPHP(filePath string) (*DBConfig, string, error) {
 
 	text := string(content)
 
-	// Extract DB configuration values using regex
+	// 1. Extract the 'db' block to scope our search
+	dbBlock := extractBlock(text, "db")
+	if dbBlock == "" {
+		return nil, "", fmt.Errorf("could not find 'db' configuration in env.php")
+	}
+
+	// 2. Extract 'connection' => 'default' sub-block within db block
+	defaultBlock := dbBlock
+	connBlock := extractBlock(dbBlock, "connection")
+	if connBlock != "" {
+		db := extractBlock(connBlock, "default")
+		if db != "" {
+			defaultBlock = db
+		}
+	}
+
+	// 3. Extract DB configuration values from the scoped block
 	dbConfig := &DBConfig{
 		Port: "3306", // default port
 	}
 
-	// Match 'host' => 'value'
-	host := extractPHPValue(text, "host")
+	host := extractPHPValue(defaultBlock, "host")
 	if host != "" {
 		// Handle host:port format (e.g., 'localhost:3307')
 		if strings.Contains(host, ":") {
@@ -50,17 +67,12 @@ func ParseEnvPHP(filePath string) (*DBConfig, string, error) {
 		}
 	}
 
-	// Match 'dbname' => 'value'
-	dbConfig.DBName = extractPHPValue(text, "dbname")
+	dbConfig.DBName = extractPHPValue(defaultBlock, "dbname")
+	dbConfig.Username = extractPHPValue(defaultBlock, "username")
+	dbConfig.Password = extractPHPValue(defaultBlock, "password")
 
-	// Match 'username' => 'value'
-	dbConfig.Username = extractPHPValue(text, "username")
-
-	// Match 'password' => 'value'
-	dbConfig.Password = extractPHPValue(text, "password")
-
-	// Match 'table_prefix' => 'value'
-	tablePrefix := extractPHPValue(text, "table_prefix")
+	// 4. table_prefix is at the db block level
+	tablePrefix := extractPHPValue(dbBlock, "table_prefix")
 
 	// Validate that we got at minimum a host and dbname
 	if dbConfig.Host == "" && dbConfig.DBName == "" {
@@ -68,6 +80,33 @@ func ParseEnvPHP(filePath string) (*DBConfig, string, error) {
 	}
 
 	return dbConfig, tablePrefix, nil
+}
+
+// extractBlock extracts the content of a PHP array block for a given key.
+// It finds 'key' => [ and uses bracket counting to locate the matching ].
+// Returns the content between the outermost [ and ] (exclusive), or empty string if not found.
+func extractBlock(content, key string) string {
+	pattern := regexp.MustCompile(fmt.Sprintf(`['"]%s['"]\s*=>\s*\[`, regexp.QuoteMeta(key)))
+	loc := pattern.FindStringIndex(content)
+	if loc == nil {
+		return ""
+	}
+
+	// Find the opening '[' position (last char matched by the pattern)
+	start := loc[1] - 1
+	depth := 0
+	for i := start; i < len(content); i++ {
+		switch content[i] {
+		case '[':
+			depth++
+		case ']':
+			depth--
+			if depth == 0 {
+				return content[start+1 : i]
+			}
+		}
+	}
+	return ""
 }
 
 // extractPHPValue extracts a value from PHP array syntax like 'key' => 'value'.
