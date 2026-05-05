@@ -4,35 +4,21 @@
 [![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/Platform-Linux%20%7C%20macOS%20%7C%20Windows-lightgrey)]()
 
-A high-performance, read-only security scanner for Magento 2 that detects web shells, payment skimmers, obfuscated malware, and database injections. 
-
----
-
-## Table of Contents
-
-- [Features](#features)
-- [Requirements](#requirements)
-- [Installation](#installation)
-- [Usage](#usage)
-- [Supported Magento Versions](#supported-magento-versions)
-- [Detection Capabilities](#detection-capabilities)
-- [Database Inspection](#database-inspection)
-- [Architecture](#architecture)
-- [Disclaimer](#disclaimer)
-- [License](#license)
+A high-performance, read-only security scanner for Magento 2 that detects web shells, payment skimmers, obfuscated malware, and database injections. Built in Go with a real-time TUI interface.
 
 ---
 
 ## Features
 
+- **68 security detection rules** across 4 threat categories
 - **Pure read-only operation** — zero modifications to the target system
-- **Dual scan modes** — Fast (PHP/PHTML only) and Full (all suspicious files)
-- **70+ malware signatures** across 4 threat categories
-- **Database security inspection** — scans `core_config_data`, `cms_block`, `cms_page`, and `sales_order_status_history`
-- **Real-time TUI progress display** — non-scrolling terminal interface powered by Bubble Tea
-- **Resource limiting** — configurable CPU and memory caps with automatic throttling
-- **Automatic Magento environment detection** — validates Magento root and reads `env.php` for DB config
-- **Remediation SQL generation** — produces ready-to-use SQL statements for database threats
+- **Real-time TUI progress** — non-scrolling terminal interface powered by Bubble Tea
+- **Concurrent scan engine** — multi-worker goroutine architecture for high throughput
+- **Smart file filtering** — skips vendor/, node_modules/, test/, .git/ by default
+- **Database security inspection** — checks `core_config_data`, `cms_block`, `cms_page`, and `sales_order_status_history`
+- **JSON export** — full scan results exportable for CI/CD integration
+- **Context-aware cancellation** — press `q` to gracefully exit at any time
+- **Resource throttling** — automatic CPU/memory limiting with hysteresis
 - **Standalone binary** — no PHP dependency, deploys as a single executable
 
 ---
@@ -43,16 +29,24 @@ A high-performance, read-only security scanner for Magento 2 that detects web sh
 |-------------|---------|
 | **Go 1.21+** | Required for building from source |
 | **MySQL access** | Optional — needed for database scanning |
-| **Target system** | Must be a Magento 2 installation (with `app/etc/env.php` and `bin/magento`) |
+| **Target system** | Magento 2 installation (with `app/etc/env.php` and `bin/magento`) |
 
 ---
 
 ## Installation
 
+### From source
+
 ```bash
 git clone <repo-url>
 cd magescan
 go build -o magescan ./cmd/magescan/
+```
+
+### Using go install
+
+```bash
+go install github.com/magescan/cmd/magescan@latest
 ```
 
 The resulting `magescan` binary is self-contained and can be copied to any target server.
@@ -61,122 +55,81 @@ The resulting `magescan` binary is self-contained and can be copied to any targe
 
 ## Usage
 
-### Basic Usage
+### Basic
 
 ```bash
-# Scan current directory (must be Magento root)
-./magescan
-
-# Scan a specific Magento installation
+# Scan a Magento installation
 ./magescan -path /var/www/magento
-```
 
-### CLI Flags
-
-| Flag | Default | Description |
-|------|---------|-------------|
-| `-path` | `.` | Magento root path |
-| `-mode` | `fast` | Scan mode: `fast` or `full` |
-| `-cpu-limit` | `0` | Max CPU cores to use (0 = all available) |
-| `-mem-limit` | `0` | Max memory in MB (0 = unlimited) |
-| `-output` | `terminal` | Output format: `terminal` or `json` |
-
-### Examples
-
-```bash
-# Fast scan (PHP and PHTML files only)
+# Fast scan (default — PHP/PHTML files only)
 ./magescan -path /var/www/magento -mode fast
 
 # Full scan (all suspicious file types)
 ./magescan -path /var/www/magento -mode full
+```
 
-# Scan with resource limits (2 CPU cores, 256MB memory cap)
+### CLI Options
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `-path` | `.` | Magento root path (required) |
+| `-mode` | `fast` | Scan mode: `fast` (PHP/PHTML only) or `full` (all file types) |
+| `-debug` | `false` | Enable debug logging to `magescan-debug.log` |
+| `-output` | _(none)_ | Export full scan results to a JSON file |
+| `-scan-vendor` | `false` | Include vendor/, test/, and third-party directories |
+| `-cpu-limit` | `0` | Max CPU cores to use (0 = all available) |
+| `-mem-limit` | `0` | Max memory in MB (0 = unlimited) |
+
+### Examples
+
+```bash
+# Full scan with JSON export
+./magescan -path /var/www/magento -mode full -output results.json
+
+# Include vendor directory in scan
+./magescan -path /var/www/magento -scan-vendor
+
+# Debug mode for troubleshooting
+./magescan -path /var/www/magento -debug
+
+# Resource-limited scan (2 cores, 256MB cap)
 ./magescan -path /var/www/magento -cpu-limit 2 -mem-limit 256
-
-# Full scan with conservative resource usage
-./magescan -path /var/www/magento -mode full -cpu-limit 1 -mem-limit 128
 ```
 
-### Example Output
-
-```
-MageScan v1.0.0 - Magento 2 Security Scanner
-Target: /var/www/magento
-Version: Magento 2.4.6
-Mode: Fast Scan
-
-═══════════════════════════════════════════════════════════
-  SCAN REPORT
-═══════════════════════════════════════════════════════════
-
-  FILE THREATS (3 found)
-  ──────────────────────────────────────────────────────
-  [CRITICAL] WebShell/Backdoor
-  File: pub/media/wysiwyg/.cache.php:1
-  Rule: WEBSHELL-001 — Base64 encoded eval execution
-  Match: eval(base64_decode("JGNvbm5lY3Rpb24...
-
-  [HIGH] Payment Skimmer
-  File: app/design/frontend/custom/js/checkout.js:42
-  Rule: SKIMMER-015 — JavaScript keylogger pattern in PHP
-  Match: addEventListener('keydown'...
-
-  DATABASE THREATS (1 found)
-  ──────────────────────────────────────────────────────
-  [Critical] core_config_data (ID: 1842)
-  Path: design/head/includes
-  Description: External script injection
-  Remediation: UPDATE core_config_data SET value = '' WHERE config_id = 1842;
-
-═══════════════════════════════════════════════════════════
-  Scan completed in 00:12 | Exit code: 1 (threats found)
-═══════════════════════════════════════════════════════════
-```
-
-The scanner exits with code `1` if any threats are found, and `0` for a clean scan.
-
----
-
-## Supported Magento Versions
-
-- Magento Open Source 2.0.x through 2.4.x (all Magento 2 versions)
-- Adobe Commerce (Cloud and On-Premise)
-- Magento Community/Enterprise 2.x variants
-
-Version is auto-detected from `composer.json` in the Magento root.
+The scanner exits with code `1` if threats are found, `0` for a clean scan.
 
 ---
 
 ## Detection Capabilities
 
-### Web Shells / Backdoors (34 signatures)
+### Web Shells / Backdoors
 
 Detects common PHP web shells and remote code execution backdoors:
 
-- Known shells: **c99**, **r57**, **WSO**, **b374k**, **weevely**, **FilesMan**, **phpShell**
-- Custom eval-based shells (`eval($_POST[...]`, `eval(base64_decode(...)`)
+- Known shells: c99, r57, WSO, b374k, weevely, FilesMan, phpShell
+- Eval-based shells (`eval($_POST[...])`, `eval(base64_decode(...))`)
 - System command execution (`system()`, `exec()`, `passthru()`, `shell_exec()`, `popen()`, `proc_open()`)
 - File upload backdoors and write-based persistence
 - GLOBALS-based indirect function calls
 - LD_PRELOAD and Visbot-specific backdoors
 
-### Payment Skimmers / Magecart (15 signatures)
+### Payment Skimmers / Magecart
 
 Detects credit card theft and data exfiltration:
 
 - Direct CC data accessors (`getCcNumber()`, `getCcCid()`)
-- Data exfiltration via mail, CURL, and serialized POST data
+- Data exfiltration via mail, CURL, and serialized POST
 - JavaScript injection and checkout page interception
 - WebSocket and WebRTC covert exfiltration channels
 - Keylogger patterns (keypress/keydown event listeners)
-- Known skimmer domain patterns (suspicious TLDs)
+- Known skimmer domain patterns
 - SVG onload script execution
 
-### Obfuscation Techniques (12 signatures)
+### Obfuscation Techniques
 
 Detects code hiding and payload concealment:
 
-- Extremely long base64-encoded strings (>500 chars)
+- Long base64-encoded strings (>500 chars)
 - `gzinflate`/`gzuncompress` chains
 - `chr()` concatenation obfuscation
 - String fragmentation and array-based assembly
@@ -185,12 +138,12 @@ Detects code hiding and payload concealment:
 - Bitwise XOR decryption patterns
 - FOPO, IonCube, and Zend Guard encoded files
 
-### Magento-Specific Threats (12 signatures)
+### Magento-Specific Threats
 
 Detects attacks targeting Magento internals:
 
 - Core file modification and path traversal includes
-- Admin credential harvesting patterns
+- Admin credential harvesting
 - Payment data logging to image files
 - `.htaccess` manipulation (PHP handler for non-PHP extensions)
 - Cron job backdoors
@@ -200,18 +153,35 @@ Detects attacks targeting Magento internals:
 
 ---
 
+## Performance
+
+| Feature | Detail |
+|---------|--------|
+| Concurrent workers | `2×NumCPU` goroutines for parallel file scanning |
+| File filtering | Skips `vendor/`, `node_modules/`, `test/`, `tests/`, `.git/`, `update/` by default |
+| Per-file timeout | 10 seconds maximum per file |
+| Max file size | 512 KB — larger files are skipped |
+| Long line skip | Lines exceeding 64 KB are ignored |
+| Regex optimization | Non-greedy matching to prevent catastrophic backtracking |
+| Memory throttling | Background monitor pauses workers when limit is exceeded, resumes at 80% |
+| Graceful exit | Press `q` at any time; context cancellation propagates to all workers |
+
+---
+
 ## Database Inspection
+
+When `app/etc/env.php` contains valid database credentials, MageScan automatically performs read-only database checks.
 
 ### Tables Scanned
 
 | Table | What Is Checked |
 |-------|-----------------|
-| `core_config_data` | Sensitive config paths (`design/head/includes`, `design/footer/absolute_footer`, etc.) and any path containing "script" or "html" |
-| `cms_block` | All CMS block content for injected scripts, iframes, and suspicious patterns |
-| `cms_page` | All CMS page content for injected scripts, iframes, and suspicious patterns |
+| `core_config_data` | Sensitive config paths and values containing scripts/HTML |
+| `cms_block` | All CMS block content for injected scripts and suspicious patterns |
+| `cms_page` | All CMS page content for injected scripts and suspicious patterns |
 | `sales_order_status_history` | Recent order comments (last 1000) for injected content |
 
-### Database Patterns Detected
+### Patterns Detected
 
 - External script injection (`<script src="...">`)
 - `eval()` in CMS content
@@ -225,14 +195,13 @@ Detects attacks targeting Magento internals:
 
 ### Remediation SQL
 
-For each database finding, MageScan generates a ready-to-use SQL statement:
+For each database finding, MageScan generates a ready-to-use SQL statement for manual review:
 
 ```sql
--- Review and clean content for cms_block ID 42 (identifier: footer_links)
 UPDATE cms_block SET content = '' WHERE block_id = 42;
 ```
 
-> **Note:** The scanner itself is fully read-only. It connects to the database with SELECT-only queries. The generated SQL is provided for manual review and execution by the administrator.
+> **Note:** The scanner is fully read-only. Generated SQL is for administrator review only.
 
 ---
 
@@ -242,19 +211,21 @@ UPDATE cms_block SET content = '' WHERE block_id = 42;
 magescan/
 ├── cmd/magescan/   # CLI entry point, flag parsing, orchestration
 ├── config/         # Magento root detection, env.php parsing, DB config
-├── scanner/        # File scanning engine, rules, pattern matcher, file filter
+├── scanner/        # Concurrent scan engine, 68 rules, pattern matcher, file filter
 ├── database/       # DB connector, security inspector, remediation SQL
 ├── resource/       # CPU/memory limiter with automatic throttling
 └── ui/             # TUI progress display (Bubble Tea) and report rendering
 ```
 
-### Key Design Decisions
+---
 
-- **Worker pool** — Spawns `2×NumCPU` concurrent workers for file scanning
-- **Chunked reading** — Large files (>1MB) are read in overlapping chunks to avoid memory spikes
-- **Resource throttling** — Background monitor checks memory every 500ms; automatically pauses workers when limits are exceeded, resumes at 80% threshold (hysteresis)
-- **Context cancellation** — Full support for graceful shutdown via SIGINT/SIGTERM
-- **Table prefix awareness** — Respects Magento table prefixes for database queries
+## Supported Magento Versions
+
+- Magento Open Source 2.0.x through 2.4.x
+- Adobe Commerce (Cloud and On-Premise)
+- Magento Community/Enterprise 2.x variants
+
+Version is auto-detected from `composer.json` in the Magento root.
 
 ---
 
@@ -262,7 +233,7 @@ magescan/
 
 > **This tool is intended for authorized security auditing only.**
 >
-> Only use MageScan on systems you own or have explicit written permission to scan. Unauthorized scanning of systems may violate applicable laws and regulations.
+> Only use MageScan on systems you own or have explicit written permission to scan. Unauthorized scanning may violate applicable laws and regulations.
 
 ---
 

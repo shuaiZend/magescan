@@ -3,17 +3,19 @@ package scanner
 import (
 	"context"
 	"io/fs"
+	"log"
 	"os"
 	"path/filepath"
 	"runtime"
 	"sync"
 	"sync/atomic"
+	"time"
 )
 
 const (
-	maxFileSize   = 1 << 20 // 1MB
-	chunkOverlap  = 100     // bytes of overlap between chunks
-	progressEvery = 100     // send progress every N files
+	maxFileSize   = 512 * 1024 // 512KB - most malicious PHP files are much smaller
+	chunkOverlap  = 100        // bytes of overlap between chunks
+	progressEvery = 100        // send progress every N files
 )
 
 // Finding represents a detected threat in a file
@@ -55,16 +57,18 @@ type Engine struct {
 	mu          sync.Mutex
 	progressCh  chan ScanProgress
 	throttleCh  chan struct{}
+	debugLog    *log.Logger
 }
 
 // NewEngine creates a scanning engine
-func NewEngine(rootPath string, mode string, progressCh chan ScanProgress) *Engine {
+func NewEngine(rootPath string, mode string, includeVendor bool, progressCh chan ScanProgress, debugLog *log.Logger) *Engine {
 	return &Engine{
 		rootPath:    rootPath,
-		filter:      NewScanFilter(mode),
-		matcher:     NewMatcher(),
+		filter:      NewScanFilter(mode, includeVendor),
+		matcher:     NewMatcher(debugLog),
 		workerCount: runtime.NumCPU() * 2,
 		progressCh:  progressCh,
+		debugLog:    debugLog,
 	}
 }
 
@@ -104,11 +108,14 @@ func (e *Engine) Scan(ctx context.Context) ([]Finding, error) {
 
 	// Send final progress
 	if e.progressCh != nil {
-		e.progressCh <- ScanProgress{
+		select {
+		case e.progressCh <- ScanProgress{
 			ScannedFiles: atomic.LoadInt64(&e.stats.ScannedFiles),
 			TotalFiles:   atomic.LoadInt64(&e.stats.TotalFiles),
 			ThreatsFound: atomic.LoadInt64(&e.stats.ThreatsFound),
 			Done:         true,
+		}:
+		case <-ctx.Done():
 		}
 	}
 
@@ -205,29 +212,45 @@ func (e *Engine) worker(ctx context.Context, jobs <-chan string) {
 		if e.throttleCh != nil {
 			select {
 			case <-e.throttleCh:
-				// Received throttle signal, block until released
-				<-e.throttleCh
+				// Received throttle signal, back off to reduce load.
+				time.Sleep(500 * time.Millisecond)
 			default:
 				// No throttle, continue
 			}
 		}
 
-		e.scanFile(path)
+		start := time.Now()
+		e.scanFile(ctx, path)
+		elapsed := time.Since(start)
+
+		if e.debugLog != nil && elapsed > 2*time.Second {
+			e.debugLog.Printf("SLOW FILE: %s took %v", path, elapsed)
+		}
 
 		scanned := atomic.AddInt64(&e.stats.ScannedFiles, 1)
 		if e.progressCh != nil && scanned%progressEvery == 0 {
-			e.progressCh <- ScanProgress{
+			select {
+			case e.progressCh <- ScanProgress{
 				CurrentFile:  path,
 				ScannedFiles: scanned,
 				TotalFiles:   atomic.LoadInt64(&e.stats.TotalFiles),
 				ThreatsFound: atomic.LoadInt64(&e.stats.ThreatsFound),
+			}:
+			case <-ctx.Done():
+				return
+			default:
+				// Channel full, skip this progress update
 			}
 		}
 	}
 }
 
 // scanFile reads and scans a single file
-func (e *Engine) scanFile(path string) {
+func (e *Engine) scanFile(ctx context.Context, path string) {
+	// Create a per-file timeout context to prevent hanging on problematic files
+	fileCtx, fileCancel := context.WithTimeout(ctx, 10*time.Second)
+	defer fileCancel()
+
 	// Open read-only
 	f, err := os.OpenFile(path, os.O_RDONLY, 0)
 	if err != nil {
@@ -251,19 +274,25 @@ func (e *Engine) scanFile(path string) {
 		if err != nil {
 			return
 		}
-		e.processMatches(path, content)
+		e.processMatches(fileCtx, path, content)
 	} else {
 		// Large file: read in chunks with overlap
-		e.scanLargeFile(f, path, size)
+		e.scanLargeFile(fileCtx, f, path, size)
 	}
 }
 
 // scanLargeFile reads a file in 1MB chunks with overlap
-func (e *Engine) scanLargeFile(f *os.File, path string, size int64) {
+func (e *Engine) scanLargeFile(ctx context.Context, f *os.File, path string, size int64) {
 	buf := make([]byte, maxFileSize)
 	var offset int64
 
 	for offset < size {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
+
 		readSize := int64(maxFileSize)
 		if offset+readSize > size {
 			readSize = size - offset
@@ -274,19 +303,21 @@ func (e *Engine) scanLargeFile(f *os.File, path string, size int64) {
 			break
 		}
 
-		e.processMatches(path, buf[:n])
+		e.processMatches(ctx, path, buf[:n])
 
-		// Move forward by chunk size minus overlap
-		offset += int64(n) - chunkOverlap
+		// If this was the final chunk, stop
 		if int64(n) < readSize {
 			break
 		}
+
+		// Move forward by chunk size minus overlap
+		offset += int64(n) - chunkOverlap
 	}
 }
 
 // processMatches runs the matcher on content and records findings
-func (e *Engine) processMatches(path string, content []byte) {
-	matches := e.matcher.Match(content)
+func (e *Engine) processMatches(ctx context.Context, path string, content []byte) {
+	matches := e.matcher.Match(ctx, content)
 	if len(matches) == 0 {
 		return
 	}
@@ -312,11 +343,15 @@ func (e *Engine) processMatches(path string, content []byte) {
 
 	// Send progress on finding
 	if e.progressCh != nil {
-		e.progressCh <- ScanProgress{
+		select {
+		case e.progressCh <- ScanProgress{
 			CurrentFile:  path,
 			ScannedFiles: atomic.LoadInt64(&e.stats.ScannedFiles),
 			TotalFiles:   atomic.LoadInt64(&e.stats.TotalFiles),
 			ThreatsFound: atomic.LoadInt64(&e.stats.ThreatsFound),
+		}:
+		default:
+			// Channel full, skip this progress update
 		}
 	}
 }

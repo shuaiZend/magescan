@@ -4,9 +4,11 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"log"
 	"os"
 	"os/signal"
 	"path/filepath"
+	"sync"
 	"syscall"
 	"time"
 
@@ -27,10 +29,21 @@ func main() {
 	mode := flag.String("mode", "fast", "Scan mode: fast or full")
 	cpuLimit := flag.Int("cpu-limit", 0, "Max CPU cores (0 = all)")
 	memLimit := flag.Int("mem-limit", 0, "Max memory MB (0 = unlimited)")
-	output := flag.String("output", "terminal", "Output format: terminal or json")
+	output := flag.String("output", "", "Export full scan results to file (JSON format)")
+	debugMode := flag.Bool("debug", false, "Enable debug logging to file")
+	scanVendor := flag.Bool("scan-vendor", false, "Include vendor, test, and third-party directories in scan")
 	flag.Parse()
 
-	_ = output // reserved for future json output
+	// Set up debug logging
+	var debugLog *log.Logger
+	if *debugMode {
+		f, err := os.Create("magescan-debug.log")
+		if err == nil {
+			defer f.Close()
+			debugLog = log.New(f, "[DEBUG] ", log.LstdFlags|log.Lmicroseconds)
+			debugLog.Println("Debug mode enabled")
+		}
+	}
 
 	// Detect and validate Magento installation
 	rootPath, err := config.DetectMagentoRoot(*path)
@@ -76,8 +89,8 @@ func main() {
 	}()
 
 	// Create progress channels
-	fileProgressCh := make(chan scanner.ScanProgress, 64)
-	dbProgressCh := make(chan database.DBProgress, 64)
+	fileProgressCh := make(chan scanner.ScanProgress, 256)
+	dbProgressCh := make(chan database.DBProgress, 256)
 
 	// Initialize TUI
 	m := ui.NewModel()
@@ -91,16 +104,19 @@ func main() {
 	var dbFindings []database.DBFinding
 
 	// Run scanning in a goroutine
+	var scanWg sync.WaitGroup
+	scanWg.Add(1)
 	go func() {
+		defer scanWg.Done()
+		defer close(fileProgressCh)
+		defer close(dbProgressCh)
+
 		// Create and run file scanner
-		engine := scanner.NewEngine(rootPath, *mode, fileProgressCh)
+		engine := scanner.NewEngine(rootPath, *mode, *scanVendor, fileProgressCh, debugLog)
 		engine.SetThrottleChannel(limiter.ThrottleChannel())
 
 		findings, _ := engine.Scan(ctx)
 		fileFindings = findings
-
-		// Forward file progress to TUI
-		// (progress is sent via channel, we drain it below)
 
 		// Attempt DB scan
 		if dbErr == nil && dbConfig != nil {
@@ -156,6 +172,10 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Cancel context to signal scan goroutine to stop, then wait for it
+	cancel()
+	scanWg.Wait()
+
 	// Convert findings to report format
 	elapsed := time.Since(startTime)
 	elapsedStr := fmt.Sprintf("%02d:%02d", int(elapsed.Minutes()), int(elapsed.Seconds())%60)
@@ -199,6 +219,15 @@ func main() {
 
 	report := ui.RenderReport(reportData)
 	fmt.Println(report)
+
+	// Export full results to file if --output specified
+	if *output != "" {
+		if err := ui.ExportJSON(*output, reportData); err != nil {
+			fmt.Fprintf(os.Stderr, "Error exporting results: %v\n", err)
+		} else {
+			fmt.Printf("\nFull results exported to: %s\n", *output)
+		}
+	}
 
 	// Exit code based on threats
 	if len(reportFileFindings) > 0 || len(reportDBFindings) > 0 {

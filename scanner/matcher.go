@@ -2,8 +2,11 @@ package scanner
 
 import (
 	"bytes"
+	"context"
+	"log"
 	"regexp"
 	"sync"
+	"time"
 )
 
 // CompiledRule holds a rule along with its pre-compiled regex pattern (if applicable)
@@ -22,8 +25,9 @@ type MatchResult struct {
 // Matcher provides thread-safe malware signature matching against file content.
 // All regex patterns are pre-compiled at initialization for performance.
 type Matcher struct {
-	rules []CompiledRule
-	once  sync.Once
+	rules    []CompiledRule
+	once     sync.Once
+	debugLog *log.Logger
 }
 
 var (
@@ -33,12 +37,18 @@ var (
 
 // NewMatcher creates and returns a Matcher with all rules compiled.
 // It uses sync.Once internally to ensure regex compilation happens only once.
-func NewMatcher() *Matcher {
+// An optional debugLog can be passed for debug-mode logging.
+func NewMatcher(debugLog *log.Logger) *Matcher {
 	matcherOnce.Do(func() {
 		defaultMatcher = &Matcher{}
 		defaultMatcher.compile()
 	})
-	return defaultMatcher
+	// Always set debugLog (may be nil) on returned instance
+	m := &Matcher{
+		rules:    defaultMatcher.rules,
+		debugLog: debugLog,
+	}
+	return m
 }
 
 // compile pre-compiles all regex patterns from the rule set
@@ -62,7 +72,7 @@ func (m *Matcher) compile() {
 
 // Match checks the provided content against all loaded rules and returns
 // all matching results with line numbers. This method is safe for concurrent use.
-func (m *Matcher) Match(content []byte) []MatchResult {
+func (m *Matcher) Match(ctx context.Context, content []byte) []MatchResult {
 	if len(content) == 0 {
 		return nil
 	}
@@ -71,10 +81,30 @@ func (m *Matcher) Match(content []byte) []MatchResult {
 	lines := bytes.Split(content, []byte("\n"))
 
 	for _, cr := range m.rules {
+		// Check context cancellation between rules
+		select {
+		case <-ctx.Done():
+			return results
+		default:
+		}
+
+		var ruleStart time.Time
+		if m.debugLog != nil {
+			ruleStart = time.Now()
+		}
+
 		if cr.Rule.IsRegex && cr.Regexp != nil {
-			results = append(results, matchRegex(cr, content, lines)...)
+			results = append(results, matchRegex(ctx, cr, content, lines)...)
 		} else if cr.Rule.Pattern != "" {
-			results = append(results, matchLiteral(cr, content, lines)...)
+			results = append(results, matchLiteral(ctx, cr, content, lines)...)
+		}
+
+		if m.debugLog != nil {
+			elapsed := time.Since(ruleStart)
+			if elapsed > 100*time.Millisecond {
+				m.debugLog.Printf("SLOW RULE: %s took %v (content size: %d bytes)",
+					cr.Rule.ID, elapsed, len(content))
+			}
 		}
 	}
 
@@ -83,7 +113,7 @@ func (m *Matcher) Match(content []byte) []MatchResult {
 
 // matchLiteral performs fast literal string matching using bytes.Contains,
 // then identifies the specific line number(s) where the match occurs.
-func matchLiteral(cr CompiledRule, content []byte, lines [][]byte) []MatchResult {
+func matchLiteral(ctx context.Context, cr CompiledRule, content []byte, lines [][]byte) []MatchResult {
 	pattern := []byte(cr.Rule.Pattern)
 
 	// Quick check: does the content contain the pattern at all?
@@ -91,41 +121,26 @@ func matchLiteral(cr CompiledRule, content []byte, lines [][]byte) []MatchResult
 		return nil
 	}
 
+	// Maximum line length to process (64KB)
+	const maxLineLen = 64 * 1024
+
 	var results []MatchResult
 	seen := make(map[int]bool)
 
 	for lineNum, line := range lines {
-		if bytes.Contains(line, pattern) {
-			if seen[lineNum] {
-				continue
+		// Check for cancellation periodically
+		if lineNum%50 == 0 && lineNum > 0 {
+			select {
+			case <-ctx.Done():
+				return results
+			default:
 			}
-			seen[lineNum] = true
-			matchedText := truncateString(string(line), 100)
-			results = append(results, MatchResult{
-				Rule:        cr.Rule,
-				LineNumber:  lineNum + 1, // 1-based line numbers
-				MatchedText: matchedText,
-			})
 		}
-	}
 
-	return results
-}
-
-// matchRegex performs regex-based matching against individual lines,
-// reporting the line number and matched text for each finding.
-func matchRegex(cr CompiledRule, content []byte, lines [][]byte) []MatchResult {
-	// First, quick check if regex matches anywhere in content
-	if !cr.Regexp.Match(content) {
-		return nil
-	}
-
-	var results []MatchResult
-	seen := make(map[int]bool)
-
-	for lineNum, line := range lines {
-		loc := cr.Regexp.Find(line)
-		if loc != nil {
+		if len(line) > maxLineLen {
+			continue
+		}
+		if bytes.Contains(line, pattern) {
 			if seen[lineNum] {
 				continue
 			}
@@ -136,6 +151,44 @@ func matchRegex(cr CompiledRule, content []byte, lines [][]byte) []MatchResult {
 				LineNumber:  lineNum + 1,
 				MatchedText: matchedText,
 			})
+		}
+	}
+
+	return results
+}
+
+// matchRegex performs regex-based matching against individual lines,
+// reporting the line number and matched text for each finding.
+func matchRegex(ctx context.Context, cr CompiledRule, content []byte, lines [][]byte) []MatchResult {
+	var results []MatchResult
+	seen := make(map[int]bool)
+
+	// Maximum line length to process with regex (64KB)
+	const maxLineLen = 64 * 1024
+
+	for lineNum, line := range lines {
+		// Check for cancellation periodically
+		if lineNum%50 == 0 && lineNum > 0 {
+			select {
+			case <-ctx.Done():
+				return results
+			default:
+			}
+		}
+
+		if len(line) > maxLineLen {
+			continue
+		}
+		loc := cr.Regexp.Find(line)
+		if loc != nil {
+			if !seen[lineNum] {
+				seen[lineNum] = true
+				results = append(results, MatchResult{
+					Rule:        cr.Rule,
+					LineNumber:  lineNum + 1,
+					MatchedText: truncateString(string(loc), 100),
+				})
+			}
 		}
 	}
 

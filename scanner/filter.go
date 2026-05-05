@@ -7,10 +7,11 @@ import (
 
 // ScanFilter determines which files and directories to include/exclude
 type ScanFilter struct {
-	Mode string // "fast" or "full"
+	Mode          string // "fast" or "full"
+	IncludeVendor bool   // if true, scan vendor/test directories too
 }
 
-// Directories to always skip
+// Directories to always skip (regardless of flags)
 var skipDirs = map[string]bool{
 	"var/cache":         true,
 	"var/page_cache":    true,
@@ -23,8 +24,15 @@ var skipDirs = map[string]bool{
 	"pub/static":        true,
 	"generated":         true,
 	".git":              true,
-	"node_modules":      true,
-	"vendor/bin":        true,
+}
+
+// defaultSkipDirs are skipped unless --scan-vendor is set
+var defaultSkipDirs = []string{
+	"vendor",
+	"node_modules",
+	"test",
+	"tests",
+	"update",
 }
 
 // Extensions to exclude in full mode
@@ -54,8 +62,8 @@ var excludeExtsFull = map[string]bool{
 }
 
 // NewScanFilter creates a new ScanFilter with the specified mode
-func NewScanFilter(mode string) *ScanFilter {
-	return &ScanFilter{Mode: mode}
+func NewScanFilter(mode string, includeVendor bool) *ScanFilter {
+	return &ScanFilter{Mode: mode, IncludeVendor: includeVendor}
 }
 
 // ShouldSkipDir returns true if directory should be skipped entirely
@@ -63,22 +71,31 @@ func (f *ScanFilter) ShouldSkipDir(relPath string) bool {
 	// Normalize to forward slashes for consistency
 	relPath = filepath.ToSlash(relPath)
 
-	// Check exact match
+	// Check exact match against always-skip dirs
 	if skipDirs[relPath] {
 		return true
 	}
 
-	// Check if it's a subdirectory of a skip directory or starts with one
+	// Check if it's a subdirectory of an always-skip directory
 	for dir := range skipDirs {
 		if strings.HasPrefix(relPath, dir+"/") || strings.HasPrefix(relPath+"/", dir+"/") {
 			return true
 		}
 	}
 
-	// Also check the base name for top-level skip dirs
+	// Check the base name against always-skip dirs
 	base := filepath.Base(relPath)
-	if base == ".git" || base == "node_modules" || base == "generated" {
+	if base == ".git" || base == "generated" {
 		return true
+	}
+
+	// Unless --scan-vendor is set, skip vendor/test/node_modules/update directories
+	if !f.IncludeVendor {
+		for _, skip := range defaultSkipDirs {
+			if base == skip {
+				return true
+			}
+		}
 	}
 
 	return false

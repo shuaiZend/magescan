@@ -158,7 +158,7 @@ func getWebShellRules() []Rule {
 		{
 			ID: "WEBSHELL-019", Category: CategoryWebShell, Severity: SeverityCritical,
 			Description: "proc_open with user-supplied input",
-			Regex:       `proc_open\s*\(.*\$_`, IsRegex: true,
+			Regex:       `proc_open\s*\(.*?\$_`, IsRegex: true,
 		},
 		{
 			ID: "WEBSHELL-020", Category: CategoryWebShell, Severity: SeverityHigh,
@@ -173,12 +173,7 @@ func getWebShellRules() []Rule {
 		{
 			ID: "WEBSHELL-022", Category: CategoryWebShell, Severity: SeverityCritical,
 			Description: "File write with REQUEST data",
-			Regex:       `file_put_contents\s*\(.*\$_(REQUEST|POST|GET)`, IsRegex: true,
-		},
-		{
-			ID: "WEBSHELL-023", Category: CategoryWebShell, Severity: SeverityMedium,
-			Description: "PHP info disclosure",
-			Pattern:     "phpinfo()",
+			Regex:       `file_put_contents\s*\(.*?\$_(REQUEST|POST|GET)`, IsRegex: true,
 		},
 		{
 			ID: "WEBSHELL-024", Category: CategoryWebShell, Severity: SeverityCritical,
@@ -193,7 +188,7 @@ func getWebShellRules() []Rule {
 		{
 			ID: "WEBSHELL-026", Category: CategoryWebShell, Severity: SeverityCritical,
 			Description: "WSO web shell detected",
-			Pattern:     "WSO",
+			Pattern:     "wso_version",
 		},
 		{
 			ID: "WEBSHELL-027", Category: CategoryWebShell, Severity: SeverityCritical,
@@ -221,14 +216,9 @@ func getWebShellRules() []Rule {
 			Pattern:     "phpFileManager",
 		},
 		{
-			ID: "WEBSHELL-032", Category: CategoryWebShell, Severity: SeverityMedium,
-			Description: "Adminer database management tool (potential backdoor)",
-			Pattern:     "@link http://www.adminer.org",
-		},
-		{
 			ID: "WEBSHELL-033", Category: CategoryWebShell, Severity: SeverityCritical,
 			Description: "Visbot backdoor in Magento",
-			Regex:       `<\?php\s*/\*\*\*\s*Magento.*Visbot`, IsRegex: true,
+			Regex:       `<\?php\s*/\*\*\*\s*Magento.*?Visbot`, IsRegex: true,
 		},
 		{
 			ID: "WEBSHELL-034", Category: CategoryWebShell, Severity: SeverityCritical,
@@ -259,22 +249,22 @@ func getSkimmerRules() []Rule {
 		{
 			ID: "SKIMMER-003", Category: CategorySkimmer, Severity: SeverityCritical,
 			Description: "Credit card data exfiltration via mail",
-			Regex:       `cc_number.*mail\(|mail\(.*cc_number`, IsRegex: true,
+			Regex:       `cc_number.*?mail\(|mail\(.*?cc_number`, IsRegex: true,
 		},
 		{
 			ID: "SKIMMER-004", Category: CategorySkimmer, Severity: SeverityCritical,
 			Description: "Credit card data exfiltration via curl",
-			Regex:       `cc_number.*curl|curl.*cc_number`, IsRegex: true,
+			Regex:       `cc_number.*?curl|curl.*?cc_number`, IsRegex: true,
 		},
 		{
 			ID: "SKIMMER-005", Category: CategorySkimmer, Severity: SeverityHigh,
 			Description: "Form data interceptor pattern",
-			Regex:       `document\.forms.*querySelector|querySelector.*document\.forms`, IsRegex: true,
+			Regex:       `document\.forms.*?querySelector|querySelector.*?document\.forms`, IsRegex: true,
 		},
 		{
 			ID: "SKIMMER-006", Category: CategorySkimmer, Severity: SeverityCritical,
 			Description: "Checkout page data interceptor",
-			Regex:       `preg_match.*onepage.*file_put_contents`, IsRegex: true,
+			Regex:       `preg_match.*?onepage.*?file_put_contents`, IsRegex: true,
 		},
 		{
 			ID: "SKIMMER-007", Category: CategorySkimmer, Severity: SeverityCritical,
@@ -309,7 +299,7 @@ func getSkimmerRules() []Rule {
 		{
 			ID: "SKIMMER-013", Category: CategorySkimmer, Severity: SeverityHigh,
 			Description: "Checkout payment interception pattern",
-			Regex:       `checkout.*payment.*intercept|intercept.*payment.*checkout`, IsRegex: true,
+			Regex:       `checkout.*?payment.*?intercept|intercept.*?payment.*?checkout`, IsRegex: true,
 		},
 		{
 			ID: "SKIMMER-014", Category: CategorySkimmer, Severity: SeverityCritical,
@@ -319,7 +309,7 @@ func getSkimmerRules() []Rule {
 		{
 			ID: "SKIMMER-015", Category: CategorySkimmer, Severity: SeverityHigh,
 			Description: "JavaScript keylogger pattern in PHP",
-			Regex:       `addEventListener.*keypress|addEventListener.*keydown|onkeypress`, IsRegex: true,
+			Regex:       `addEventListener.*?keypress|addEventListener.*?keydown|onkeypress`, IsRegex: true,
 		},
 	}
 }
@@ -334,13 +324,13 @@ func getObfuscationRules() []Rule {
 	return []Rule{
 		{
 			ID: "OBFUSC-001", Category: CategoryObfuscation, Severity: SeverityHigh,
-			Description: "Extremely long base64 encoded string (>500 chars)",
-			Regex:       `[A-Za-z0-9+/=]{500,}`, IsRegex: true,
+			Description: "Extremely long base64 encoded string (>2000 chars)",
+			Regex:       `[A-Za-z0-9+/=]{2000,5000}`, IsRegex: true,
 		},
 		{
 			ID: "OBFUSC-002", Category: CategoryObfuscation, Severity: SeverityHigh,
 			Description: "Hex-encoded variable names or strings",
-			Regex:       `\\x[0-9a-fA-F]{2}(?:\\x[0-9a-fA-F]{2}){3,}`, IsRegex: true,
+			Regex:       `\\x[0-9a-fA-F]{2}(?:\\x[0-9a-fA-F]{2}){3,50}`, IsRegex: true,
 		},
 		{
 			ID: "OBFUSC-003", Category: CategoryObfuscation, Severity: SeverityMedium,
@@ -358,21 +348,6 @@ func getObfuscationRules() []Rule {
 			Regex:       `\$\$\w+\s*\(`, IsRegex: true,
 		},
 		{
-			ID: "OBFUSC-006", Category: CategoryObfuscation, Severity: SeverityHigh,
-			Description: "FOPO obfuscated PHP code",
-			Pattern:     "Free Online PHP Obfuscator",
-		},
-		{
-			ID: "OBFUSC-007", Category: CategoryObfuscation, Severity: SeverityMedium,
-			Description: "IonCube encoded file without valid license context",
-			Pattern:     "ionCube",
-		},
-		{
-			ID: "OBFUSC-008", Category: CategoryObfuscation, Severity: SeverityMedium,
-			Description: "Zend Guard encoded file",
-			Pattern:     "Zend Guard",
-		},
-		{
 			ID: "OBFUSC-009", Category: CategoryObfuscation, Severity: SeverityHigh,
 			Description: "Eval of reversed/manipulated string",
 			Regex:       `eval\s*\(\s*strrev\s*\(`, IsRegex: true,
@@ -380,7 +355,7 @@ func getObfuscationRules() []Rule {
 		{
 			ID: "OBFUSC-010", Category: CategoryObfuscation, Severity: SeverityHigh,
 			Description: "Bitwise XOR string decryption pattern",
-			Regex:       `\$\w+\s*\^\s*\$\w+.*eval|\beval\b.*\$\w+\s*\^\s*\$\w+`, IsRegex: true,
+			Regex:       `\$\w+\s*\^\s*\$\w+.*?eval|\beval\b.*?\$\w+\s*\^\s*\$\w+`, IsRegex: true,
 		},
 		{
 			ID: "OBFUSC-011", Category: CategoryObfuscation, Severity: SeverityMedium,
@@ -416,12 +391,12 @@ func getMagentoRules() []Rule {
 		{
 			ID: "MAGENTO-003", Category: CategoryMagento, Severity: SeverityCritical,
 			Description: "Admin credential harvesting pattern",
-			Regex:       `admin_user.*password`, IsRegex: true,
+			Regex:       `admin_user.*?password`, IsRegex: true,
 		},
 		{
 			ID: "MAGENTO-004", Category: CategoryMagento, Severity: SeverityCritical,
 			Description: "Payment data written to image files",
-			Regex:       `fopen.*\.(jpg|png|gif).*(payment|cc)|(?:payment|cc).*fopen.*\.(jpg|png|gif)`, IsRegex: true,
+			Regex:       `fopen.*?\.(jpg|png|gif).*?(payment|cc)|(?:payment|cc).*?fopen.*?\.(jpg|png|gif)`, IsRegex: true,
 		},
 		{
 			ID: "MAGENTO-005", Category: CategoryMagento, Severity: SeverityHigh,
@@ -431,7 +406,7 @@ func getMagentoRules() []Rule {
 		{
 			ID: "MAGENTO-006", Category: CategoryMagento, Severity: SeverityHigh,
 			Description: "Data hidden in JPEG headers with base64",
-			Regex:       `JPEG-1\.1.*base64_encode|base64_encode.*JPEG-1\.1`, IsRegex: true,
+			Regex:       `JPEG-1\.1.*?base64_encode|base64_encode.*?JPEG-1\.1`, IsRegex: true,
 		},
 		{
 			ID: "MAGENTO-007", Category: CategoryMagento, Severity: SeverityHigh,
@@ -441,27 +416,27 @@ func getMagentoRules() []Rule {
 		{
 			ID: "MAGENTO-008", Category: CategoryMagento, Severity: SeverityHigh,
 			Description: "Cron job backdoor pattern",
-			Regex:       `crontab|/etc/cron\.|schedule.*backdoor`, IsRegex: true,
+			Regex:       `crontab|/etc/cron\.`, IsRegex: true,
 		},
 		{
 			ID: "MAGENTO-009", Category: CategoryMagento, Severity: SeverityHigh,
 			Description: "Modified .htaccess with PHP handler for non-PHP files",
-			Regex:       `AddHandler.*php|AddType.*php.*\.(jpg|png|gif|css|js)`, IsRegex: true,
+			Regex:       `AddHandler.*?php|AddType.*?php.*?\.(jpg|png|gif|css|js)`, IsRegex: true,
 		},
 		{
 			ID: "MAGENTO-010", Category: CategoryMagento, Severity: SeverityHigh,
 			Description: "Magento config.php credential extraction",
-			Regex:       `Mage::getConfig\(\).*decrypt|decrypt.*password`, IsRegex: true,
+			Regex:       `Mage::getConfig\(\).*?decrypt|decrypt.*?password`, IsRegex: true,
 		},
 		{
 			ID: "MAGENTO-011", Category: CategoryMagento, Severity: SeverityCritical,
 			Description: "Direct database credential access",
-			Regex:       `local\.xml.*crypt|core_config_data.*payment`, IsRegex: true,
+			Regex:       `local\.xml.*?crypt|core_config_data.*?payment`, IsRegex: true,
 		},
 		{
 			ID: "MAGENTO-012", Category: CategoryMagento, Severity: SeverityHigh,
 			Description: "REST API token theft pattern",
-			Regex:       `oauth_token.*secret|admin.*token.*bearer`, IsRegex: true,
+			Regex:       `oauth_token.*?secret|admin.*?token.*?bearer`, IsRegex: true,
 		},
 	}
 }

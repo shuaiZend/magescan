@@ -31,24 +31,24 @@ type ScanCompleteMsg struct{}
 
 // FileFinding is a simplified finding for display
 type FileFinding struct {
-	FilePath    string
-	LineNumber  int
-	Severity    string
-	Category    string
-	Description string
-	MatchedText string
+	FilePath    string `json:"file_path"`
+	LineNumber  int    `json:"line_number"`
+	Severity    string `json:"severity"`
+	Category    string `json:"category"`
+	Description string `json:"description"`
+	MatchedText string `json:"matched_text"`
 }
 
 // DBFindingDisplay is a simplified DB finding for display
 type DBFindingDisplay struct {
-	Table        string
-	RecordID     int64
-	Field        string
-	Path         string
-	Description  string
-	MatchedText  string
-	Severity     string
-	RemediateSQL string
+	Table        string `json:"table"`
+	RecordID     int64  `json:"record_id"`
+	Field        string `json:"field"`
+	Path         string `json:"path,omitempty"`
+	Description  string `json:"description"`
+	MatchedText  string `json:"matched_text"`
+	Severity     string `json:"severity"`
+	RemediateSQL string `json:"remediate_sql,omitempty"`
 }
 
 // Model is the main TUI model
@@ -255,6 +255,8 @@ func (m Model) View() string {
 		b.WriteString("\n")
 	}
 
+	b.WriteString("\n")
+	b.WriteString(dimStyle.Render("  https://github.com/shuaiZend/magescan"))
 	b.WriteString("\n")
 	b.WriteString(dimStyle.Render("  Press q to quit"))
 	b.WriteString("\n")

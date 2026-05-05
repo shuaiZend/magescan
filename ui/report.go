@@ -1,9 +1,12 @@
 package ui
 
 import (
+	"encoding/json"
 	"fmt"
+	"os"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/lipgloss"
 )
@@ -54,7 +57,60 @@ var (
 	separatorSingle = "───────────────────────────────────────────────────────"
 )
 
-// RenderReport generates the final formatted report string
+// maxTerminalFindings is the maximum number of findings to display in terminal
+const maxTerminalFindings = 20
+
+// Summary holds severity counts for the report
+type Summary struct {
+	Critical int `json:"critical"`
+	High     int `json:"high"`
+	Medium   int `json:"medium"`
+	Low      int `json:"low"`
+	Total    int `json:"total"`
+}
+
+func generateSummary(fileFindings []FileFinding, dbFindings []DBFindingDisplay) Summary {
+	counts := countBySeverity(fileFindings, dbFindings)
+	total := counts["CRITICAL"] + counts["HIGH"] + counts["MEDIUM"] + counts["LOW"]
+	return Summary{
+		Critical: counts["CRITICAL"],
+		High:     counts["HIGH"],
+		Medium:   counts["MEDIUM"],
+		Low:      counts["LOW"],
+		Total:    total,
+	}
+}
+
+// ExportJSON writes the full scan results to a JSON file
+func ExportJSON(filePath string, data ReportData) error {
+	report := struct {
+		Timestamp      string             `json:"timestamp"`
+		MagentoVersion string             `json:"magento_version"`
+		ScanMode       string             `json:"scan_mode"`
+		ScanPath       string             `json:"scan_path"`
+		ElapsedTime    string             `json:"elapsed_time"`
+		Summary        Summary            `json:"summary"`
+		FileFindings   []FileFinding      `json:"file_findings"`
+		DBFindings     []DBFindingDisplay `json:"db_findings"`
+	}{
+		Timestamp:      time.Now().Format(time.RFC3339),
+		MagentoVersion: data.MagentoVersion,
+		ScanMode:       data.ScanMode,
+		ScanPath:       data.ScanPath,
+		ElapsedTime:    data.ElapsedTime,
+		Summary:        generateSummary(data.FileFindings, data.DBFindings),
+		FileFindings:   data.FileFindings,
+		DBFindings:     data.DBFindings,
+	}
+
+	jsonData, err := json.MarshalIndent(report, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(filePath, jsonData, 0644)
+}
+
+// RenderReport generates the final formatted report string (summary mode for terminal)
 func RenderReport(data ReportData) string {
 	var b strings.Builder
 
@@ -62,6 +118,9 @@ func RenderReport(data ReportData) string {
 	b.WriteString(separatorDouble + "\n")
 	b.WriteString(headerStyle.Render("  MAGESCAN SECURITY REPORT") + "\n")
 	b.WriteString(separatorDouble + "\n\n")
+
+	// Project info
+	b.WriteString("  Project:   https://github.com/shuaiZend/magescan\n")
 
 	// Target info
 	b.WriteString(fmt.Sprintf("  Target:    %s\n", data.ScanPath))
@@ -101,14 +160,21 @@ func RenderReport(data ReportData) string {
 		return b.String()
 	}
 
-	// File Threats
-	if len(data.FileFindings) > 0 {
-		b.WriteString("\n" + separatorSingle + "\n")
-		b.WriteString(headerStyle.Render("  FILE THREATS") + "\n")
-		b.WriteString(separatorSingle + "\n\n")
+	// Top findings (limited to maxTerminalFindings)
+	b.WriteString("\n" + separatorSingle + "\n")
+	b.WriteString(headerStyle.Render("  TOP FINDINGS") + "\n")
+	b.WriteString(separatorSingle + "\n\n")
 
+	// Merge and sort all findings for top display
+	shown := 0
+
+	// Show file findings (sorted by severity)
+	if len(data.FileFindings) > 0 {
 		sorted := sortFileFindings(data.FileFindings)
 		for _, f := range sorted {
+			if shown >= maxTerminalFindings {
+				break
+			}
 			sevLabel := renderSeverityTag(f.Severity)
 			b.WriteString(fmt.Sprintf("  %s %s\n", sevLabel, f.Category))
 			b.WriteString(fmt.Sprintf("  File: %s:%d\n", filePathStyle.Render(f.FilePath), f.LineNumber))
@@ -118,16 +184,16 @@ func RenderReport(data ReportData) string {
 				matchDisplay = matchDisplay[:77] + "..."
 			}
 			b.WriteString(fmt.Sprintf("  Match: %s\n\n", matchDisplay))
+			shown++
 		}
 	}
 
-	// Database Threats
-	if len(data.DBFindings) > 0 {
-		b.WriteString(separatorSingle + "\n")
-		b.WriteString(headerStyle.Render("  DATABASE THREATS") + "\n")
-		b.WriteString(separatorSingle + "\n\n")
-
+	// Show DB findings if still under limit
+	if len(data.DBFindings) > 0 && shown < maxTerminalFindings {
 		for _, f := range data.DBFindings {
+			if shown >= maxTerminalFindings {
+				break
+			}
 			sevLabel := renderSeverityTag(f.Severity)
 			b.WriteString(fmt.Sprintf("  %s %s (ID: %d)\n", sevLabel, f.Table, f.RecordID))
 			if f.Path != "" {
@@ -138,25 +204,15 @@ func RenderReport(data ReportData) string {
 			if len(matchDisplay) > 80 {
 				matchDisplay = matchDisplay[:77] + "..."
 			}
-			b.WriteString(fmt.Sprintf("  Match: %s\n", matchDisplay))
-			if f.RemediateSQL != "" {
-				b.WriteString(fmt.Sprintf("  \n  Fix: %s\n", sqlStyle.Render(f.RemediateSQL)))
-			}
-			b.WriteString("\n")
+			b.WriteString(fmt.Sprintf("  Match: %s\n\n", matchDisplay))
+			shown++
 		}
 	}
 
-	// Remediation section
-	sqlCommands := collectRemediationSQL(data.DBFindings)
-	if len(sqlCommands) > 0 {
-		b.WriteString(separatorSingle + "\n")
-		b.WriteString(headerStyle.Render("  REMEDIATION") + "\n")
-		b.WriteString(separatorSingle + "\n\n")
-		b.WriteString("  Run the following SQL commands to clean database threats:\n\n")
-		for _, sql := range sqlCommands {
-			b.WriteString(fmt.Sprintf("  %s\n", sqlStyle.Render(sql)))
-		}
-		b.WriteString("\n")
+	// Truncation notice
+	if total > maxTerminalFindings {
+		b.WriteString(fmt.Sprintf("  ... and %d more findings not shown.\n", total-maxTerminalFindings))
+		b.WriteString("  Use --output <file> to export all findings to JSON.\n\n")
 	}
 
 	// Footer

@@ -31,22 +31,23 @@ type DBProgress struct {
 // dbPattern defines a malicious pattern to scan for in database content.
 type dbPattern struct {
 	Pattern     *regexp.Regexp
+	Exclude     *regexp.Regexp // optional: if set, match is ignored when Exclude matches
 	Description string
 	Severity    string
 }
 
 var dbPatterns = []dbPattern{
-	{regexp.MustCompile(`(?i)<script[^>]*src\s*=\s*['"]https?://`), "External script injection", "Critical"},
-	{regexp.MustCompile(`(?i)eval\(`), "Eval in CMS content", "Critical"},
-	{regexp.MustCompile(`(?i)<iframe`), "IFrame injection (possible redirect/phishing)", "High"},
-	{regexp.MustCompile(`(?i)javascript:`), "JavaScript protocol injection", "High"},
-	{regexp.MustCompile(`(?i)document\.write\(`), "Document write injection", "High"},
-	{regexp.MustCompile(`(?i)base64_decode\(`), "Base64 decode in CMS content", "High"},
-	{regexp.MustCompile(`(?i)<script[^>]*>(?:(?!</script>).)*(?:atob|btoa|fetch|XMLHttpRequest)`), "Suspicious inline script", "High"},
-	{regexp.MustCompile(`(?i)\bonload\s*=`), "Onload event handler injection", "Medium"},
-	{regexp.MustCompile(`(?i)\bonerror\s*=`), "Onerror event handler injection", "Medium"},
-	{regexp.MustCompile(`(?i)<link[^>]*href\s*=\s*['"]https?://(?!.*(?:googleapis|gstatic|cloudflare|jquery|bootstrapcdn))`), "Suspicious external resource", "Medium"},
-	{regexp.MustCompile(`(?:\.ru|\.cn|\.tk|\.pw|\.top|\.xyz|\.club|\.work|\.buzz)/`), "Suspicious TLD in content", "Medium"},
+	{regexp.MustCompile(`(?i)<script[^>]*src\s*=\s*['"]https?://`), nil, "External script injection", "Critical"},
+	{regexp.MustCompile(`(?i)eval\(`), nil, "Eval in CMS content", "Critical"},
+	{regexp.MustCompile(`(?i)<iframe`), nil, "IFrame injection (possible redirect/phishing)", "High"},
+	{regexp.MustCompile(`(?i)javascript:`), nil, "JavaScript protocol injection", "High"},
+	{regexp.MustCompile(`(?i)document\.write\(`), nil, "Document write injection", "High"},
+	{regexp.MustCompile(`(?i)base64_decode\(`), nil, "Base64 decode in CMS content", "High"},
+	{regexp.MustCompile(`(?is)<script[^>]*>.*(?:atob|btoa|fetch|XMLHttpRequest)`), nil, "Suspicious inline script", "High"},
+	{regexp.MustCompile(`(?i)\bonload\s*="`), nil, "Onload event handler injection", "Medium"},
+	{regexp.MustCompile(`(?i)\bonerror\s*="`), nil, "Onerror event handler injection", "Medium"},
+	{regexp.MustCompile(`(?i)<link[^>]*href\s*=\s*['"]https?://`), regexp.MustCompile(`(?i)(?:googleapis|gstatic|cloudflare|jquery|bootstrapcdn)`), "Suspicious external resource", "Medium"},
+	{regexp.MustCompile(`(?:\.ru|\.cn|\.tk|\.pw|\.top|\.xyz|\.club|\.work|\.buzz)/`), nil, "Suspicious TLD in content", "Medium"},
 }
 
 // sensitivePaths are core_config_data paths that are commonly targeted by attackers.
@@ -152,6 +153,9 @@ func (i *Inspector) scanCoreConfigData(ctx context.Context) error {
 
 		for _, p := range dbPatterns {
 			if p.Pattern.MatchString(value.String) {
+				if p.Exclude != nil && p.Exclude.MatchString(value.String) {
+					continue
+				}
 				threats++
 				i.findings = append(i.findings, DBFinding{
 					Table:        tableName,
@@ -203,6 +207,9 @@ func (i *Inspector) scanCMSBlocks(ctx context.Context) error {
 
 		for _, p := range dbPatterns {
 			if p.Pattern.MatchString(content.String) {
+				if p.Exclude != nil && p.Exclude.MatchString(content.String) {
+					continue
+				}
 				threats++
 				i.findings = append(i.findings, DBFinding{
 					Table:       tableName,
@@ -255,6 +262,9 @@ func (i *Inspector) scanCMSPages(ctx context.Context) error {
 
 		for _, p := range dbPatterns {
 			if p.Pattern.MatchString(content.String) {
+				if p.Exclude != nil && p.Exclude.MatchString(content.String) {
+					continue
+				}
 				threats++
 				i.findings = append(i.findings, DBFinding{
 					Table:       tableName,
@@ -306,6 +316,9 @@ func (i *Inspector) scanOrderStatusHistory(ctx context.Context) error {
 
 		for _, p := range dbPatterns {
 			if p.Pattern.MatchString(comment.String) {
+				if p.Exclude != nil && p.Exclude.MatchString(comment.String) {
+					continue
+				}
 				threats++
 				i.findings = append(i.findings, DBFinding{
 					Table:        tableName,
