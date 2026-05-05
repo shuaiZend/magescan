@@ -111,6 +111,27 @@ func (m *Matcher) Match(ctx context.Context, content []byte) []MatchResult {
 	return results
 }
 
+// isCommentLine returns true if the line (after trimming whitespace) is a comment
+func isCommentLine(line []byte) bool {
+	trimmed := bytes.TrimLeft(line, " \t")
+	if len(trimmed) == 0 {
+		return false
+	}
+	if bytes.HasPrefix(trimmed, []byte("//")) {
+		return true
+	}
+	if bytes.HasPrefix(trimmed, []byte("#")) {
+		return true
+	}
+	if bytes.HasPrefix(trimmed, []byte("/*")) {
+		return true
+	}
+	if trimmed[0] == '*' {
+		return true
+	}
+	return false
+}
+
 // matchLiteral performs fast literal string matching using bytes.Contains,
 // then identifies the specific line number(s) where the match occurs.
 func matchLiteral(ctx context.Context, cr CompiledRule, content []byte, lines [][]byte) []MatchResult {
@@ -123,6 +144,8 @@ func matchLiteral(ctx context.Context, cr CompiledRule, content []byte, lines []
 
 	// Maximum line length to process (64KB)
 	const maxLineLen = 64 * 1024
+
+	skipComments := cr.Rule.Severity != SeverityCritical
 
 	var results []MatchResult
 	seen := make(map[int]bool)
@@ -138,6 +161,9 @@ func matchLiteral(ctx context.Context, cr CompiledRule, content []byte, lines []
 		}
 
 		if len(line) > maxLineLen {
+			continue
+		}
+		if skipComments && isCommentLine(line) {
 			continue
 		}
 		if bytes.Contains(line, pattern) {
@@ -166,6 +192,8 @@ func matchRegex(ctx context.Context, cr CompiledRule, content []byte, lines [][]
 	// Maximum line length to process with regex (64KB)
 	const maxLineLen = 64 * 1024
 
+	skipComments := cr.Rule.Severity != SeverityCritical
+
 	for lineNum, line := range lines {
 		// Check for cancellation periodically
 		if lineNum%50 == 0 && lineNum > 0 {
@@ -177,6 +205,9 @@ func matchRegex(ctx context.Context, cr CompiledRule, content []byte, lines [][]
 		}
 
 		if len(line) > maxLineLen {
+			continue
+		}
+		if skipComments && isCommentLine(line) {
 			continue
 		}
 		loc := cr.Regexp.Find(line)

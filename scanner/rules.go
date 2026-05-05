@@ -38,13 +38,14 @@ const (
 
 // Rule defines a single malware detection signature
 type Rule struct {
-	ID          string
-	Category    RuleCategory
-	Severity    Severity
-	Description string
-	Pattern     string // For literal string match
-	Regex       string // For regex match (compiled at init)
-	IsRegex     bool
+	ID           string
+	Category     RuleCategory
+	Severity     Severity
+	Description  string
+	Pattern      string // For literal string match
+	Regex        string // For regex match (compiled at init)
+	IsRegex      bool
+	ExcludePaths []string // file path patterns to exclude (glob-like, e.g. "*/WeltPixel/*/License.php")
 }
 
 // GetAllRules returns the complete set of malware detection signatures
@@ -225,6 +226,41 @@ func getWebShellRules() []Rule {
 			Description: "LD_PRELOAD backdoor (killall)",
 			Pattern:     "killall -9",
 		},
+		{
+			ID: "WEBSHELL-035", Category: CategoryWebShell, Severity: SeverityCritical,
+			Description: "Cookie-based MD5 backdoor authentication (Sansec PolyShell)",
+			Regex:       `\$_COOKIE\s*\[\s*['"][a-z]?['"]\s*\].*md5|md5\s*\(.*\$_COOKIE`, IsRegex: true,
+		},
+		{
+			ID: "WEBSHELL-036", Category: CategoryWebShell, Severity: SeverityCritical,
+			Description: "Known backdoor beacon response (PolyShell/Visbot)",
+			Regex:       `echo\s+['"]?(8194460|409723|Pong)['"]?\s*;`, IsRegex: true,
+		},
+		{
+			ID: "WEBSHELL-037", Category: CategoryWebShell, Severity: SeverityCritical,
+			Description: "PHP file in fake assets/images path (PolyShell persistence)",
+			Regex:       `(var|lib|app|pub|vendor|bin|setup|generated)/assets/images/\w+\.php`, IsRegex: true,
+		},
+		{
+			ID: "WEBSHELL-038", Category: CategoryWebShell, Severity: SeverityHigh,
+			Description: "GSocket backdoor data file indicator",
+			Pattern:     "defunct.dat",
+		},
+		{
+			ID: "WEBSHELL-039", Category: CategoryWebShell, Severity: SeverityCritical,
+			Description: "GSocket cron-based persistence mechanism",
+			Regex:       `defunct-kernel|mm_percpu_wq.*base64|base64.*bash.*defunct`, IsRegex: true,
+		},
+		{
+			ID: "WEBSHELL-040", Category: CategoryWebShell, Severity: SeverityCritical,
+			Description: "File upload via copy() with user-controlled destination",
+			Regex:       `copy\s*\(\s*\$_FILES.*\$_(POST|GET|REQUEST)`, IsRegex: true,
+		},
+		{
+			ID: "WEBSHELL-042", Category: CategoryWebShell, Severity: SeverityCritical,
+			Description: "Supply chain License.php backdoor activation (Sansec)",
+			Regex:       `adminLoadLicense|LicenseApi\.php.*include_once|include_once.*License\.php.*\$_(GET|POST|REQUEST)`, IsRegex: true,
+		},
 	}
 }
 
@@ -239,12 +275,12 @@ func getSkimmerRules() []Rule {
 		{
 			ID: "SKIMMER-001", Category: CategorySkimmer, Severity: SeverityCritical,
 			Description: "Direct credit card number accessor",
-			Pattern:     "getCcNumber()",
+			Regex:       `getCcNumber\(\).*?(?:mail|curl|fwrite|file_put_contents|fopen|file_get_contents|socket)|(?:mail|curl|fwrite|file_put_contents|fopen)\s*\(.*?getCcNumber`, IsRegex: true,
 		},
 		{
 			ID: "SKIMMER-002", Category: CategorySkimmer, Severity: SeverityCritical,
 			Description: "CVV data accessor",
-			Pattern:     "getCcCid()",
+			Regex:       `getCcCid\(\).*?(?:mail|curl|fwrite|file_put_contents|fopen|file_get_contents|socket)|(?:mail|curl|fwrite|file_put_contents|fopen)\s*\(.*?getCcCid`, IsRegex: true,
 		},
 		{
 			ID: "SKIMMER-003", Category: CategorySkimmer, Severity: SeverityCritical,
@@ -274,7 +310,7 @@ func getSkimmerRules() []Rule {
 		{
 			ID: "SKIMMER-008", Category: CategorySkimmer, Severity: SeverityHigh,
 			Description: "CURL data exfiltration with POST fields",
-			Pattern:     "CURLOPT_POSTFIELDS",
+			Regex:       `CURLOPT_POSTFIELDS\s*[,=>\s].*?(\$_(POST|REQUEST|GET|COOKIE)|cc_number|cc_cid|card_number|getCcNumber|serialize\s*\(\s*\$_)`, IsRegex: true,
 		},
 		{
 			ID: "SKIMMER-009", Category: CategorySkimmer, Severity: SeverityCritical,
@@ -309,7 +345,52 @@ func getSkimmerRules() []Rule {
 		{
 			ID: "SKIMMER-015", Category: CategorySkimmer, Severity: SeverityHigh,
 			Description: "JavaScript keylogger pattern in PHP",
-			Regex:       `addEventListener.*?keypress|addEventListener.*?keydown|onkeypress`, IsRegex: true,
+			Regex:       `on(?:keypress|keydown|keyup).*?(?:XMLHttpRequest|fetch\s*\(|new\s+Image|\.src\s*=|navigator\.sendBeacon|document\.cookie)`, IsRegex: true,
+		},
+		{
+			ID: "SKIMMER-016", Category: CategorySkimmer, Severity: SeverityCritical,
+			Description: "SVG pixel injection with onload handler (Magecart)",
+			Regex:       `<svg[^>]*(?:width|height)\s*=\s*['"]1(?:px)?['"][^>]*onload\s*=`, IsRegex: true,
+		},
+		{
+			ID: "SKIMMER-017", Category: CategorySkimmer, Severity: SeverityHigh,
+			Description: "XOR string decoding with known skimmer keys",
+			Regex:       `String\.fromCharCode\s*\([^)]*\^\s*['"](?:script|key|salt)['"]`, IsRegex: true,
+		},
+		{
+			ID: "SKIMMER-018", Category: CategorySkimmer, Severity: SeverityCritical,
+			Description: "Data exfiltration to known Magecart endpoint",
+			Regex:       `(?:fetch|XMLHttpRequest|ajax|curl).*(?:fb_metrics\.php|health_check\.php)`, IsRegex: true,
+		},
+		{
+			ID: "SKIMMER-019", Category: CategorySkimmer, Severity: SeverityCritical,
+			Description: "WebRTC-based payment data exfiltration (CSP bypass)",
+			Regex:       `RTCPeerConnection.*createDataChannel|createDataChannel.*RTCPeerConnection`, IsRegex: true,
+		},
+		{
+			ID: "SKIMMER-020", Category: CategorySkimmer, Severity: SeverityCritical,
+			Description: "Known Magecart exfiltration domain (Sansec)",
+			Regex:       `(?:cdnstatics\.net|js-csp\.com|js-stats\.com|jslibrary\.net|googletagmanager\.eu|jquerycdn\.at|cdn-sources\.com|windlrr\.com|stromao\.com|cloudflare-stat\.net)`, IsRegex: true,
+		},
+		{
+			ID: "SKIMMER-021", Category: CategorySkimmer, Severity: SeverityCritical,
+			Description: "JSONP callback eval injection via Google services",
+			Regex:       `(?:googleapis\.com|youtube\.com|google\.com).*callback\s*=\s*eval`, IsRegex: true,
+		},
+		{
+			ID: "SKIMMER-022", Category: CategorySkimmer, Severity: SeverityHigh,
+			Description: "Form input harvester with data exfiltration",
+			Regex:       `querySelectorAll\s*\(\s*['"]input.*(?:new\s+Image|\.src\s*=|fetch\s*\(|sendBeacon)`, IsRegex: true,
+		},
+		{
+			ID: "SKIMMER-023", Category: CategorySkimmer, Severity: SeverityCritical,
+			Description: "Known Magecart form field naming pattern (Group Polyovki)",
+			Regex:       `(?:cardnumber|securitycode|holder|expirationdate)-kao\d+`, IsRegex: true,
+		},
+		{
+			ID: "SKIMMER-024", Category: CategorySkimmer, Severity: SeverityHigh,
+			Description: "Magecart localStorage data cache indicator",
+			Regex:       `localStorage\s*\.\s*(?:setItem|getItem)\s*\(\s*['"]_mgx_`, IsRegex: true,
 		},
 	}
 }
@@ -330,7 +411,8 @@ func getObfuscationRules() []Rule {
 		{
 			ID: "OBFUSC-002", Category: CategoryObfuscation, Severity: SeverityHigh,
 			Description: "Hex-encoded variable names or strings",
-			Regex:       `\\x[0-9a-fA-F]{2}(?:\\x[0-9a-fA-F]{2}){3,50}`, IsRegex: true,
+			Regex:       `\\x[0-9a-fA-F]{2}(?:\\x[0-9a-fA-F]{2}){19,}`, IsRegex: true,
+			ExcludePaths: []string{"*/WeltPixel/*/License.php", "*/WeltPixel/*/License/*.php"},
 		},
 		{
 			ID: "OBFUSC-003", Category: CategoryObfuscation, Severity: SeverityMedium,
@@ -366,6 +448,16 @@ func getObfuscationRules() []Rule {
 			ID: "OBFUSC-012", Category: CategoryObfuscation, Severity: SeverityHigh,
 			Description: "Dynamic function name from variable",
 			Regex:       `\$\w+\s*=\s*['"][a-z_]+['"]\s*;\s*\$\w+\s*\(`, IsRegex: true,
+		},
+		{
+			ID: "OBFUSC-013", Category: CategoryObfuscation, Severity: SeverityHigh,
+			Description: "Custom base-N encoding with XOR decryption (CosmicSting)",
+			Regex:       `parseInt\s*\(\s*\w+\s*,\s*\d+\)\s*.*String\.fromCharCode.*\^`, IsRegex: true,
+		},
+		{
+			ID: "OBFUSC-014", Category: CategoryObfuscation, Severity: SeverityHigh,
+			Description: "String.fromCharCode.apply with numeric array (skimmer decoder)",
+			Regex:       `String\.fromCharCode\.apply\s*\(\s*null\s*,\s*\[\s*\d+`, IsRegex: true,
 		},
 	}
 }
@@ -416,7 +508,8 @@ func getMagentoRules() []Rule {
 		{
 			ID: "MAGENTO-008", Category: CategoryMagento, Severity: SeverityHigh,
 			Description: "Cron job backdoor pattern",
-			Regex:       `crontab|/etc/cron\.`, IsRegex: true,
+			Regex:       `(?:shell_exec|system|exec|passthru|popen|proc_open)\s*\(.*?crontab|crontab\s+-[elr]|/etc/cron\.\w+/`, IsRegex: true,
+			ExcludePaths: []string{"*/Cron/Model/Config/*", "*/crontab.xml"},
 		},
 		{
 			ID: "MAGENTO-009", Category: CategoryMagento, Severity: SeverityHigh,
@@ -437,6 +530,26 @@ func getMagentoRules() []Rule {
 			ID: "MAGENTO-012", Category: CategoryMagento, Severity: SeverityHigh,
 			Description: "REST API token theft pattern",
 			Regex:       `oauth_token.*?secret|admin.*?token.*?bearer`, IsRegex: true,
+		},
+		{
+			ID: "MAGENTO-013", Category: CategoryMagento, Severity: SeverityCritical,
+			Description: "Known malicious Google Tag Manager container ID (Sansec)",
+			Regex:       `GTM-(?:WXN4NCG|N7PP3X2|TC8JJS2|NH2LCRH|MT3XMX7|W8FXL6X5|KQF4P5L|M9Q3LR7|M6DS7C8|55SBK75)`, IsRegex: true,
+		},
+		{
+			ID: "MAGENTO-014", Category: CategoryMagento, Severity: SeverityCritical,
+			Description: "CMS Block injection with script (CosmicSting exploit)",
+			Regex:       `rest/V1/cmsBlock.*<script|<script.*rest/V1/cmsBlock`, IsRegex: true,
+		},
+		{
+			ID: "MAGENTO-015", Category: CategoryMagento, Severity: SeverityHigh,
+			Description: "Known backdoor admin account email (Sansec)",
+			Regex:       `(?:klaviyo_support1@proton\.me|indoor@gmai\.com|nonebo@maill\.com|Chronopost@correos\.es)`, IsRegex: true,
+		},
+		{
+			ID: "MAGENTO-016", Category: CategoryMagento, Severity: SeverityCritical,
+			Description: "Backdoor loader via Magento registration.php",
+			Regex:       `registration\.php.*include_once.*License\.php|registration\.php.*LicenseApi`, IsRegex: true,
 		},
 	}
 }

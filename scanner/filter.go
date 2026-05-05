@@ -13,17 +13,20 @@ type ScanFilter struct {
 
 // Directories to always skip (regardless of flags)
 var skipDirs = map[string]bool{
-	"var/cache":         true,
-	"var/page_cache":    true,
-	"var/session":       true,
-	"var/log":           true,
-	"var/report":        true,
-	"var/tmp":           true,
-	"pub/media/catalog": true,
-	"pub/media/captcha": true,
-	"pub/static":        true,
-	"generated":         true,
-	".git":              true,
+	"var/cache":             true,
+	"var/page_cache":        true,
+	"var/session":           true,
+	"var/log":               true,
+	"var/report":            true,
+	"var/tmp":               true,
+	"var/view_preprocessed": true,
+	"var/di":                true,
+	"var/generation":        true,
+	"pub/media/catalog":     true,
+	"pub/media/captcha":     true,
+	"pub/static":            true,
+	"generated":             true,
+	".git":                  true,
 }
 
 // defaultSkipDirs are skipped unless --scan-vendor is set

@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -324,6 +325,19 @@ func (e *Engine) processMatches(ctx context.Context, path string, content []byte
 
 	findings := make([]Finding, 0, len(matches))
 	for _, m := range matches {
+		// Check ExcludePaths
+		if len(m.Rule.ExcludePaths) > 0 {
+			excluded := false
+			for _, pattern := range m.Rule.ExcludePaths {
+				if matchExcludePath(path, pattern) {
+					excluded = true
+					break
+				}
+			}
+			if excluded {
+				continue
+			}
+		}
 		findings = append(findings, Finding{
 			FilePath:    path,
 			LineNumber:  m.LineNumber,
@@ -333,6 +347,10 @@ func (e *Engine) processMatches(ctx context.Context, path string, content []byte
 			Description: m.Rule.Description,
 			MatchedText: m.MatchedText,
 		})
+	}
+
+	if len(findings) == 0 {
+		return
 	}
 
 	atomic.AddInt64(&e.stats.ThreatsFound, int64(len(findings)))
@@ -354,4 +372,24 @@ func (e *Engine) processMatches(ctx context.Context, path string, content []byte
 			// Channel full, skip this progress update
 		}
 	}
+}
+
+// matchExcludePath checks if a file path matches an exclude pattern.
+// Patterns use "*" as wildcard segments (e.g. "*/WeltPixel/*/License.php").
+func matchExcludePath(filePath string, pattern string) bool {
+	// Normalize to forward slashes
+	filePath = filepath.ToSlash(filePath)
+	parts := strings.Split(pattern, "*")
+	remaining := filePath
+	for _, part := range parts {
+		if part == "" {
+			continue
+		}
+		idx := strings.Index(remaining, part)
+		if idx < 0 {
+			return false
+		}
+		remaining = remaining[idx+len(part):]
+	}
+	return true
 }
