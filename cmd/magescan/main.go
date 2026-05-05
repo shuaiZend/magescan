@@ -102,6 +102,7 @@ func main() {
 	// Storage for findings
 	var fileFindings []scanner.Finding
 	var dbFindings []database.DBFinding
+	var dbScanStatus string
 
 	// Run scanning in a goroutine
 	var scanWg sync.WaitGroup
@@ -128,13 +129,24 @@ func main() {
 			if connErr == nil {
 				defer conn.Close()
 				inspector := database.NewInspector(conn, dbProgressCh)
-				dbResults, _ := inspector.Scan(ctx)
+				dbResults, scanErr := inspector.Scan(ctx)
 				dbFindings = dbResults
+				if scanErr != nil {
+					dbScanStatus = fmt.Sprintf("Scan error: %v", scanErr)
+				} else {
+					dbScanStatus = fmt.Sprintf("Scanned %d tables, %d threats found", 9, len(dbResults))
+				}
 			} else {
-				fmt.Fprintf(os.Stderr, "Warning: Could not connect to database: %v\n", connErr)
+				dbScanStatus = fmt.Sprintf("Connection failed: %v", connErr)
 			}
 		} else if dbErr != nil {
-			fmt.Fprintf(os.Stderr, "Warning: Could not parse env.php for DB config: %v\n", dbErr)
+			dbScanStatus = fmt.Sprintf("env.php parse error: %v", dbErr)
+		} else {
+			dbScanStatus = "No database configuration found"
+		}
+
+		if debugLog != nil {
+			debugLog.Printf("DB scan status: %s", dbScanStatus)
 		}
 
 		// Signal scan complete
@@ -215,6 +227,7 @@ func main() {
 		ElapsedTime:    elapsedStr,
 		FileFindings:   reportFileFindings,
 		DBFindings:     reportDBFindings,
+		DBScanStatus:   dbScanStatus,
 	}
 
 	report := ui.RenderReport(reportData)

@@ -20,6 +20,7 @@ type ReportData struct {
 	ElapsedTime    string
 	FileFindings   []FileFinding
 	DBFindings     []DBFindingDisplay
+	DBScanStatus   string // "connected", "env.php not found", "connection failed: ...", etc.
 }
 
 // Report styles
@@ -160,15 +161,12 @@ func RenderReport(data ReportData) string {
 		return b.String()
 	}
 
-	// Top findings (limited to maxTerminalFindings)
+	// Top file findings (limited to maxTerminalFindings)
 	b.WriteString("\n" + separatorSingle + "\n")
 	b.WriteString(headerStyle.Render("  TOP FINDINGS") + "\n")
 	b.WriteString(separatorSingle + "\n\n")
 
-	// Merge and sort all findings for top display
 	shown := 0
-
-	// Show file findings (sorted by severity)
 	if len(data.FileFindings) > 0 {
 		sorted := sortFileFindings(data.FileFindings)
 		for _, f := range sorted {
@@ -186,12 +184,21 @@ func RenderReport(data ReportData) string {
 			b.WriteString(fmt.Sprintf("  Match: %s\n\n", matchDisplay))
 			shown++
 		}
+		if len(data.FileFindings) > maxTerminalFindings {
+			b.WriteString(fmt.Sprintf("  ... and %d more file findings not shown.\n\n", len(data.FileFindings)-maxTerminalFindings))
+		}
 	}
 
-	// Show DB findings if still under limit
-	if len(data.DBFindings) > 0 && shown < maxTerminalFindings {
+	// Database findings section - ALWAYS shown separately with own limit
+	if len(data.DBFindings) > 0 {
+		b.WriteString(separatorSingle + "\n")
+		b.WriteString(headerStyle.Render("  DATABASE FINDINGS") + "\n")
+		b.WriteString(separatorSingle + "\n\n")
+
+		dbShown := 0
+		maxDBFindings := 10
 		for _, f := range data.DBFindings {
-			if shown >= maxTerminalFindings {
+			if dbShown >= maxDBFindings {
 				break
 			}
 			sevLabel := renderSeverityTag(f.Severity)
@@ -204,14 +211,29 @@ func RenderReport(data ReportData) string {
 			if len(matchDisplay) > 80 {
 				matchDisplay = matchDisplay[:77] + "..."
 			}
-			b.WriteString(fmt.Sprintf("  Match: %s\n\n", matchDisplay))
-			shown++
+			b.WriteString(fmt.Sprintf("  Match: %s\n", matchDisplay))
+			if f.RemediateSQL != "" {
+				// Show just the first line of remediation SQL
+				sqlLines := strings.SplitN(f.RemediateSQL, "\n", 2)
+				b.WriteString(fmt.Sprintf("  Fix: %s\n", sqlStyle.Render(sqlLines[len(sqlLines)-1])))
+			}
+			b.WriteString("\n")
+			dbShown++
 		}
+		if len(data.DBFindings) > maxDBFindings {
+			b.WriteString(fmt.Sprintf("  ... and %d more database findings not shown.\n", len(data.DBFindings)-maxDBFindings))
+		}
+		b.WriteString("\n")
+	} else if data.DBScanStatus != "" {
+		// Show DB scan status if no findings but status is available
+		b.WriteString(separatorSingle + "\n")
+		b.WriteString(headerStyle.Render("  DATABASE SCAN") + "\n")
+		b.WriteString(separatorSingle + "\n")
+		b.WriteString(fmt.Sprintf("  Status: %s\n\n", data.DBScanStatus))
 	}
 
 	// Truncation notice
-	if total > maxTerminalFindings {
-		b.WriteString(fmt.Sprintf("  ... and %d more findings not shown.\n", total-maxTerminalFindings))
+	if total > shown+len(data.DBFindings) {
 		b.WriteString("  Use --output <file> to export all findings to JSON.\n\n")
 	}
 
