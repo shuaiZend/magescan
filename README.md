@@ -3,6 +3,7 @@
 [![Go](https://img.shields.io/badge/Go-1.21+-00ADD8?style=flat&logo=go)](https://go.dev)
 [![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/Platform-Linux%20%7C%20macOS%20%7C%20Windows-lightgrey)]()
+[![Release](https://img.shields.io/github/v/release/shuaiZend/magescan?style=flat)](https://github.com/shuaiZend/magescan/releases)
 
 A high-performance, read-only security scanner for Magento 2 that detects web shells, payment skimmers, obfuscated malware, and database injections. Built in Go with a real-time TUI interface.
 
@@ -10,12 +11,12 @@ A high-performance, read-only security scanner for Magento 2 that detects web sh
 
 ## Features
 
-- **68 security detection rules** across 4 threat categories
+- **90+ security detection rules** across 4 threat categories
 - **Pure read-only operation** — zero modifications to the target system
 - **Real-time TUI progress** — non-scrolling terminal interface powered by Bubble Tea
 - **Concurrent scan engine** — multi-worker goroutine architecture for high throughput
 - **Smart file filtering** — skips vendor/, node_modules/, test/, .git/ by default
-- **Database security inspection** — checks `core_config_data`, `cms_block`, `cms_page`, and `sales_order_status_history`
+- **Database security inspection** — checks `core_config_data`, `cms_block`, `cms_page`, `sales_order_status_history`, `email_template`, `catalog_product_entity_text`, `layout_update`, `sales_order_address`, and `admin_user`
 - **JSON export** — full scan results exportable for CI/CD integration
 - **Context-aware cancellation** — press `q` to gracefully exit at any time
 - **Resource throttling** — automatic CPU/memory limiting with hysteresis
@@ -33,12 +34,33 @@ A high-performance, read-only security scanner for Magento 2 that detects web sh
 
 ---
 
+## Quick Start
+
+No Go environment required — download and run directly from [GitHub Releases](https://github.com/shuaiZend/magescan/releases):
+
+```bash
+# Linux (amd64)
+curl -sL https://github.com/shuaiZend/magescan/releases/latest/download/magescan-linux-amd64 -o magescan && chmod +x magescan && ./magescan -path /var/www/magento
+
+# macOS (Apple Silicon)
+curl -sL https://github.com/shuaiZend/magescan/releases/latest/download/magescan-darwin-arm64 -o magescan && chmod +x magescan && ./magescan -path /var/www/magento
+
+# macOS (Intel)
+curl -sL https://github.com/shuaiZend/magescan/releases/latest/download/magescan-darwin-amd64 -o magescan && chmod +x magescan && ./magescan -path /var/www/magento
+```
+
+---
+
 ## Installation
+
+### From GitHub Releases
+
+Download the pre-compiled binary for your platform from the [Releases page](https://github.com/shuaiZend/magescan/releases). No build tools required.
 
 ### From source
 
 ```bash
-git clone <repo-url>
+git clone https://github.com/shuaiZend/magescan.git
 cd magescan
 go build -o magescan ./cmd/magescan/
 ```
@@ -46,7 +68,7 @@ go build -o magescan ./cmd/magescan/
 ### Using go install
 
 ```bash
-go install github.com/magescan/cmd/magescan@latest
+go install github.com/shuaiZend/magescan/cmd/magescan@latest
 ```
 
 The resulting `magescan` binary is self-contained and can be copied to any target server.
@@ -180,6 +202,11 @@ When `app/etc/env.php` contains valid database credentials, MageScan automatical
 | `cms_block` | All CMS block content for injected scripts and suspicious patterns |
 | `cms_page` | All CMS page content for injected scripts and suspicious patterns |
 | `sales_order_status_history` | Recent order comments (last 1000) for injected content |
+| `email_template` | Email templates for injected scripts and malicious content |
+| `catalog_product_entity_text` | Product text attributes for hidden scripts or redirects |
+| `layout_update` | Layout XML updates for injected blocks or malicious references |
+| `sales_order_address` | Order address fields for injected content |
+| `admin_user` | Admin user accounts for unauthorized or suspicious entries |
 
 ### Patterns Detected
 
@@ -211,7 +238,7 @@ UPDATE cms_block SET content = '' WHERE block_id = 42;
 magescan/
 ├── cmd/magescan/   # CLI entry point, flag parsing, orchestration
 ├── config/         # Magento root detection, env.php parsing, DB config
-├── scanner/        # Concurrent scan engine, 68 rules, pattern matcher, file filter
+├── scanner/        # Concurrent scan engine, 90+ rules, pattern matcher, file filter
 ├── database/       # DB connector, security inspector, remediation SQL
 ├── resource/       # CPU/memory limiter with automatic throttling
 └── ui/             # TUI progress display (Bubble Tea) and report rendering
