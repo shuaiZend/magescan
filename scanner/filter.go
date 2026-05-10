@@ -25,8 +25,6 @@ var skipDirs = map[string]bool{
 	"var/view_preprocessed": true,
 	"var/di":                true,
 	"var/generation":        true,
-	"pub/media/catalog":     true,
-	"pub/media/captcha":     true,
 	"pub/static":            true,
 	"generated":             true,
 	".git":                  true,

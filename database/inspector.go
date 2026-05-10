@@ -230,6 +230,10 @@ func (i *Inspector) scanCoreConfigData(ctx context.Context) error {
 		}
 
 		for _, p := range dbPatterns {
+			// Skip TLD check for standard Magento base URLs to avoid false positives
+			if p.Description == "Suspicious TLD in content" && (path == "web/unsecure/base_url" || path == "web/secure/base_url") {
+				continue
+			}
 			if p.Pattern.MatchString(value.String) {
 				if p.Exclude != nil && p.Exclude.MatchString(value.String) {
 					continue
