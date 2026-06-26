@@ -93,6 +93,13 @@ func (m *Matcher) Match(ctx context.Context, content []byte) []MatchResult {
 			ruleStart = time.Now()
 		}
 
+		// Quick literal pre-check: skip expensive regex/literal matching if PreFilter not found
+		if cr.Rule.PreFilter != "" {
+			if !bytes.Contains(content, []byte(cr.Rule.PreFilter)) {
+				continue
+			}
+		}
+
 		if cr.Rule.IsRegex && cr.Regexp != nil {
 			results = append(results, matchRegex(ctx, cr, content, lines)...)
 		} else if cr.Rule.Pattern != "" {

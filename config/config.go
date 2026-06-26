@@ -24,11 +24,12 @@ type ScanConfig struct {
 
 // DBConfig holds database connection parameters.
 type DBConfig struct {
-	Host     string
-	Port     string
-	Username string
-	Password string
-	DBName   string
+	Host         string
+	Port         string
+	Username     string
+	Password     string
+	DBName       string
+	QueryTimeout int // per-query timeout in seconds (default 30)
 }
 
 // NewDefaultConfig returns a ScanConfig with sensible defaults.

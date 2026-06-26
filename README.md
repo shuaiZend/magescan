@@ -11,7 +11,7 @@ A high-performance, read-only security scanner for Magento 2 that detects web sh
 
 ## Features
 
-- **90+ security detection rules** across 4 threat categories
+- **85+ security detection rules** across 5 threat categories (WebShell, Payment Skimmer, Obfuscation, Magento-Specific, Misc)
 - **Pure read-only operation** — zero modifications to the target system
 - **Real-time TUI progress** — non-scrolling terminal interface powered by Bubble Tea
 - **Concurrent scan engine** — multi-worker goroutine architecture for high throughput
@@ -134,6 +134,11 @@ Detects common PHP web shells and remote code execution backdoors:
 - File upload backdoors and write-based persistence
 - GLOBALS-based indirect function calls
 - LD_PRELOAD and Visbot-specific backdoors
+- GSocket backdoor and cron-based persistence
+- PolyShell patterns (cookie-based MD5 auth, beacon response, polyglot files)
+- Supply chain License.php backdoor activation
+- C2 domain curl-pipe-php loader
+- PHP code execution in session files
 
 ### Payment Skimmers / Magecart
 
@@ -145,20 +150,27 @@ Detects credit card theft and data exfiltration:
 - WebSocket and WebRTC covert exfiltration channels
 - Keylogger patterns (keypress/keydown event listeners)
 - Known skimmer domain patterns
-- SVG onload script execution
+- SVG onload script execution and pixel injection
+- XOR string decoding with known skimmer keys
+- Known Magecart exfiltration domains (Sansec IOC)
+- JSONP callback eval injection via Google services
+- Magecart localStorage data cache and IndexedDB staging
+- Service Worker intercepting payment requests
 
 ### Obfuscation Techniques
 
 Detects code hiding and payload concealment:
 
-- Long base64-encoded strings (>500 chars)
-- `gzinflate`/`gzuncompress` chains
+- Long base64-encoded strings (>5000 chars)
+- Hex-encoded variable names or strings
 - `chr()` concatenation obfuscation
 - String fragmentation and array-based assembly
-- Hex-encoded variable names
 - Variable-variable function execution (`$$var()`)
+- Dynamic function name from variable
 - Bitwise XOR decryption patterns
-- FOPO, IonCube, and Zend Guard encoded files
+- Eval of reversed/manipulated strings
+- Custom base-N encoding with XOR decryption (CosmicSting)
+- `String.fromCharCode.apply` array decoding
 
 ### Magento-Specific Threats
 
@@ -172,6 +184,13 @@ Detects attacks targeting Magento internals:
 - Fake session cookies (typosquatted names)
 - REST API token theft
 - Direct database credential extraction
+- Known malicious Google Tag Manager container IDs (Sansec)
+- CMS Block injection with script (CosmicSting exploit)
+- Known backdoor admin account emails (Sansec)
+- Supply chain backdoor via registration.php / License.php
+- SessionReaper deserialization backdoor (CVE-2025-54236)
+- CosmicSting XXE/SSRF payload (CVE-2024-34102)
+- Supply chain SECURE_KEY backdoor signature (Sansec 2025)
 
 ---
 
@@ -205,20 +224,37 @@ When `app/etc/env.php` contains valid database credentials, MageScan automatical
 | `email_template` | Email templates for injected scripts and malicious content |
 | `catalog_product_entity_text` | Product text attributes for hidden scripts or redirects |
 | `layout_update` | Layout XML updates for injected blocks or malicious references |
-| `sales_order_address` | Order address fields for injected content |
-| `admin_user` | Admin user accounts for unauthorized or suspicious entries |
+| `sales_order_address` | Order address fields for template injection (CVE-2022-24086) |
+| `admin_user` | Admin accounts for known backdoor emails and suspicious patterns |
 
-### Patterns Detected
+### Patterns Detected (50 database signatures)
 
 - External script injection (`<script src="...">`)
 - `eval()` in CMS content
 - IFrame injection
 - `javascript:` protocol handlers
 - `document.write()` injection
-- Base64 decode in content
+- Base64 decode / atob decoding in content
 - Suspicious inline scripts (fetch, XMLHttpRequest, atob/btoa)
+- DOM manipulation (`createElement`, `appendChild`, `insertBefore`)
 - Event handler injection (onload, onerror)
 - External resources from suspicious TLDs (.ru, .cn, .tk, .pw, .top, .xyz)
+- Image beacon and sendBeacon data exfiltration
+- WebRTC data channel (CSP bypass skimmer)
+- SVG onload injection
+- Cookie theft with exfiltration
+- Magecart localStorage indicator (`_mgx_`)
+- Known Magecart form field naming (Group Polyovki)
+- Known Magecart exfiltration domains (Sansec IOC)
+- Known malicious GTM container IDs (Sansec)
+- JSONP callback eval injection
+- Base-N XOR decoding (CosmicSting)
+- WebSocket C2 connection
+- SessionReaper deserialization payload (CVE-2025-54236)
+- CosmicSting XXE/iconv payload residual (CVE-2024-34102)
+- Service Worker registration in CMS content
+- Known active C2 domains (2025 Sansec IOC)
+- Form field harvesting and checkout page monitoring
 
 ### Remediation SQL
 
@@ -238,7 +274,7 @@ UPDATE cms_block SET content = '' WHERE block_id = 42;
 magescan/
 ├── cmd/magescan/   # CLI entry point, flag parsing, orchestration
 ├── config/         # Magento root detection, env.php parsing, DB config
-├── scanner/        # Concurrent scan engine, 90+ rules, pattern matcher, file filter
+├── scanner/        # Concurrent scan engine, 85+ rules, pattern matcher, file filter
 ├── database/       # DB connector, security inspector, remediation SQL
 ├── resource/       # CPU/memory limiter with automatic throttling
 └── ui/             # TUI progress display (Bubble Tea) and report rendering

@@ -34,6 +34,7 @@ const (
 	CategorySkimmer     RuleCategory = "Payment Skimmer"
 	CategoryObfuscation RuleCategory = "Obfuscation"
 	CategoryMagento     RuleCategory = "Magento-Specific"
+	CategoryMisc        RuleCategory = "Misc"
 )
 
 // Rule defines a single malware detection signature
@@ -46,6 +47,7 @@ type Rule struct {
 	Regex        string // For regex match (compiled at init)
 	IsRegex      bool
 	ExcludePaths []string // file path patterns to exclude (glob-like, e.g. "*/WeltPixel/*/License.php")
+	PreFilter    string   // Quick literal pre-check before expensive regex (skip regex if PreFilter not found in content)
 }
 
 // GetAllRules returns the complete set of malware detection signatures
@@ -55,6 +57,7 @@ func GetAllRules() []Rule {
 	rules = append(rules, getSkimmerRules()...)
 	rules = append(rules, getObfuscationRules()...)
 	rules = append(rules, getMagentoRules()...)
+	rules = append(rules, getMiscRules()...)
 	return rules
 }
 
@@ -68,43 +71,15 @@ func getWebShellRules() []Rule {
 	return []Rule{
 		{
 			ID: "WEBSHELL-001", Category: CategoryWebShell, Severity: SeverityCritical,
-			Description: "Base64 encoded eval execution",
-			Pattern:     "eval(base64_decode(",
-		},
-		{
-			ID: "WEBSHELL-002", Category: CategoryWebShell, Severity: SeverityCritical,
-			Description: "Compressed and base64 encoded eval (gzinflate)",
-			Pattern:     "eval(gzinflate(base64_decode(",
-		},
-		{
-			ID: "WEBSHELL-003", Category: CategoryWebShell, Severity: SeverityCritical,
-			Description: "Compressed and base64 encoded eval (gzuncompress)",
-			Pattern:     "eval(gzuncompress(base64_decode(",
-		},
-		{
-			ID: "WEBSHELL-004", Category: CategoryWebShell, Severity: SeverityCritical,
-			Description: "ROT13 obfuscated eval execution",
-			Pattern:     "eval(str_rot13(",
+			Description: "Eval with encoding/compression (base64, gzinflate, gzuncompress, str_rot13)",
+			Regex:       `eval\s*\(\s*(?:base64_decode|gzinflate|gzuncompress|str_rot13)\s*\(`,
+			IsRegex:     true,
 		},
 		{
 			ID: "WEBSHELL-005", Category: CategoryWebShell, Severity: SeverityCritical,
-			Description: "Direct eval of POST data",
-			Pattern:     "eval($_POST[",
-		},
-		{
-			ID: "WEBSHELL-006", Category: CategoryWebShell, Severity: SeverityCritical,
-			Description: "Direct eval of REQUEST data",
-			Pattern:     "eval($_REQUEST[",
-		},
-		{
-			ID: "WEBSHELL-007", Category: CategoryWebShell, Severity: SeverityCritical,
-			Description: "Direct eval of GET data",
-			Pattern:     "eval($_GET[",
-		},
-		{
-			ID: "WEBSHELL-008", Category: CategoryWebShell, Severity: SeverityCritical,
-			Description: "Cookie-based eval backdoor",
-			Pattern:     "eval($_COOKIE[",
+			Description: "Eval with user-controlled input (POST/REQUEST/GET/COOKIE)",
+			Regex:       `eval\s*\(\s*\$_(?:POST|REQUEST|GET|COOKIE)`,
+			IsRegex:     true,
 		},
 		{
 			ID: "WEBSHELL-009", Category: CategoryWebShell, Severity: SeverityCritical,
@@ -133,39 +108,11 @@ func getWebShellRules() []Rule {
 		},
 		{
 			ID: "WEBSHELL-014", Category: CategoryWebShell, Severity: SeverityCritical,
-			Description: "System call with user-supplied input",
-			Pattern:     "system($_",
+			Description: "System command execution with user input (no backdoor shell needed)",
+			Regex:       `(?:system|exec|passthru|shell_exec|popen|proc_open)\s*\(\s*\$_(?:POST|REQUEST|GET|COOKIE|FILES)`,
+			IsRegex:     true,
 		},
-		{
-			ID: "WEBSHELL-015", Category: CategoryWebShell, Severity: SeverityCritical,
-			Description: "Exec with user-supplied input",
-			Pattern:     "exec($_",
-		},
-		{
-			ID: "WEBSHELL-016", Category: CategoryWebShell, Severity: SeverityCritical,
-			Description: "Passthru with user-supplied input",
-			Pattern:     "passthru($_",
-		},
-		{
-			ID: "WEBSHELL-017", Category: CategoryWebShell, Severity: SeverityCritical,
-			Description: "Shell_exec with user-supplied input",
-			Pattern:     "shell_exec($_",
-		},
-		{
-			ID: "WEBSHELL-018", Category: CategoryWebShell, Severity: SeverityCritical,
-			Description: "Popen with user-supplied input",
-			Pattern:     "popen($_",
-		},
-		{
-			ID: "WEBSHELL-019", Category: CategoryWebShell, Severity: SeverityCritical,
-			Description: "proc_open with user-supplied input",
-			Regex:       `proc_open\s*\(.*?\$_`, IsRegex: true,
-		},
-		{
-			ID: "WEBSHELL-020", Category: CategoryWebShell, Severity: SeverityHigh,
-			Description: "File upload backdoor via copy",
-			Pattern:     "copy($_FILES[",
-		},
+
 		{
 			ID: "WEBSHELL-021", Category: CategoryWebShell, Severity: SeverityHigh,
 			Description: "Unrestricted file upload handler",
@@ -279,23 +226,15 @@ func getSkimmerRules() []Rule {
 	return []Rule{
 		{
 			ID: "SKIMMER-001", Category: CategorySkimmer, Severity: SeverityCritical,
-			Description: "Direct credit card number accessor",
-			Regex:       `getCcNumber\(\).*?(?:mail|curl|fwrite|file_put_contents|fopen|file_get_contents|socket)|(?:mail|curl|fwrite|file_put_contents|fopen)\s*\(.*?getCcNumber`, IsRegex: true,
+			Description: "Credit card data access with exfiltration (getCcNumber/getCcCid)",
+			Regex:       `(?:getCcNumber|getCcCid)\(\).*?(?:mail|curl|fwrite|file_put_contents|fopen|file_get_contents|socket)|(?:mail|curl|fwrite|file_put_contents|fopen)\s*\(.*?(?:getCcNumber|getCcCid)`,
+			IsRegex:     true,
 		},
 		{
-			ID: "SKIMMER-002", Category: CategorySkimmer, Severity: SeverityCritical,
-			Description: "CVV data accessor",
-			Regex:       `getCcCid\(\).*?(?:mail|curl|fwrite|file_put_contents|fopen|file_get_contents|socket)|(?:mail|curl|fwrite|file_put_contents|fopen)\s*\(.*?getCcCid`, IsRegex: true,
-		},
-		{
-			ID: "SKIMMER-003", Category: CategorySkimmer, Severity: SeverityCritical,
-			Description: "Credit card data exfiltration via mail",
-			Regex:       `cc_number.*?mail\(|mail\(.*?cc_number`, IsRegex: true,
-		},
-		{
-			ID: "SKIMMER-004", Category: CategorySkimmer, Severity: SeverityCritical,
-			Description: "Credit card data exfiltration via curl",
-			Regex:       `cc_number.*?curl|curl.*?cc_number`, IsRegex: true,
+			ID: "SKIMMER-003", Category: CategorySkimmer, Severity: SeverityHigh,
+			Description: "Credit card field with exfiltration channel",
+			Regex:       `(?:cc_number|cc_cid|card_number).*?(?:mail\s*\(|curl|fwrite|file_put_contents)|(?:mail\s*\(|curl|fwrite|file_put_contents).*?(?:cc_number|cc_cid|card_number)`,
+			IsRegex:     true,
 		},
 		{
 			ID: "SKIMMER-005", Category: CategorySkimmer, Severity: SeverityHigh,
@@ -311,14 +250,16 @@ func getSkimmerRules() []Rule {
 			ID: "SKIMMER-007", Category: CategorySkimmer, Severity: SeverityCritical,
 			Description: "Request data serialization for exfiltration",
 			Pattern:     "base64_encode(serialize($_REQUEST",
+			PreFilter:   "serialize",
 		},
 		{
-			ID: "SKIMMER-008", Category: CategorySkimmer, Severity: SeverityHigh,
+			ID: "SKIMMER-008", Category: CategorySkimmer, Severity: SeverityCritical,
 			Description: "CURL data exfiltration with POST fields",
-			Regex:       `CURLOPT_POSTFIELDS\s*[,=>\s].*?(\$_(POST|REQUEST|GET|COOKIE)|cc_number|cc_cid|card_number|getCcNumber|serialize\s*\(\s*\$_)`, IsRegex: true,
+			Regex:       `CURLOPT_POSTFIELDS\s*[,=>\s].*?(?:\$_(?:POST|REQUEST|GET|COOKIE)|cc_number|cc_cid|card_number|getCcNumber)`, IsRegex: true,
+			ExcludePaths: []string{"*/vendor/magento/*/Curl/*", "*/vendor/guzzlehttp/*"},
 		},
 		{
-			ID: "SKIMMER-009", Category: CategorySkimmer, Severity: SeverityCritical,
+			ID: "SKIMMER-009", Category: CategorySkimmer, Severity: SeverityHigh,
 			Description: "Known skimmer domain patterns",
 			Regex:       `https?://[a-z0-9-]+\.(top|tk|ml|ga|cf|gq|xyz|pw|cc)/[a-z0-9]+\.php`, IsRegex: true,
 		},
@@ -358,7 +299,7 @@ func getSkimmerRules() []Rule {
 			Regex:       `<svg[^>]*(?:width|height)\s*=\s*['"]1(?:px)?['"][^>]*onload\s*=`, IsRegex: true,
 		},
 		{
-			ID: "SKIMMER-017", Category: CategorySkimmer, Severity: SeverityHigh,
+			ID: "SKIMMER-017", Category: CategorySkimmer, Severity: SeverityCritical,
 			Description: "XOR string decoding with known skimmer keys",
 			Regex:       `String\.fromCharCode\s*\([^)]*\^\s*['"](?:script|key|salt)['"]`, IsRegex: true,
 		},
@@ -397,6 +338,26 @@ func getSkimmerRules() []Rule {
 			Description: "Magecart localStorage data cache indicator",
 			Regex:       `localStorage\s*\.\s*(?:setItem|getItem)\s*\(\s*['"]_mgx_`, IsRegex: true,
 		},
+		{
+			ID: "SKIMMER-025", Category: CategorySkimmer, Severity: SeverityHigh,
+			Description: "Service Worker intercepting payment requests",
+			Regex:       `(?i)serviceWorker\.register.*(?:checkout|payment)|importScripts.*(?:cc|card|pay)`,
+			IsRegex: true,
+			ExcludePaths: []string{"*/vendor/*", "*/node_modules/*"},
+		},
+		{
+			ID: "SKIMMER-026", Category: CategorySkimmer, Severity: SeverityHigh,
+			Description: "IndexedDB used for payment data staging (Magecart 2025)",
+			Regex:       `(?i)indexedDB\.open.*(?:payment|card|checkout)|transaction.*objectStore.*(?:cc_|card_)`,
+			IsRegex: true,
+			ExcludePaths: []string{"*/vendor/*", "*/node_modules/*"},
+		},
+		{
+			ID: "SKIMMER-027", Category: CategoryWebShell, Severity: SeverityCritical,
+			Description: "C2 domain curl-pipe-php loader",
+			Regex:       `(?i)curl\s+https?://[a-z0-9.-]+/[a-z0-9]+\.php\s*\|\s*php`,
+			IsRegex: true,
+		},
 	}
 }
 
@@ -411,13 +372,13 @@ func getObfuscationRules() []Rule {
 		{
 			ID: "OBFUSC-001", Category: CategoryObfuscation, Severity: SeverityHigh,
 			Description: "Extremely long base64 encoded string (>2000 chars)",
-			Regex:       `[A-Za-z0-9+/=]{2000,5000}`, IsRegex: true,
+			Regex:       `[A-Za-z0-9+/=]{5000,}`, IsRegex: true,
 		},
 		{
 			ID: "OBFUSC-002", Category: CategoryObfuscation, Severity: SeverityHigh,
 			Description: "Hex-encoded variable names or strings",
 			Regex:       `\\x[0-9a-fA-F]{2}(?:\\x[0-9a-fA-F]{2}){19,}`, IsRegex: true,
-			ExcludePaths: []string{"*/WeltPixel/*/License.php", "*/WeltPixel/*/License/*.php"},
+			ExcludePaths: []string{"*/WeltPixel/*/License.php", "*/WeltPixel/*/License/*.php", "*/Amasty/*", "*/vendor/magento/*/Setup/*"},
 		},
 		{
 			ID: "OBFUSC-003", Category: CategoryObfuscation, Severity: SeverityMedium,
@@ -479,6 +440,7 @@ func getMagentoRules() []Rule {
 			ID: "MAGENTO-001", Category: CategoryMagento, Severity: SeverityHigh,
 			Description: "Path traversal include to Mage.php",
 			Pattern:     "include '../../../../../../app/Mage.php'",
+			PreFilter:   "Mage.php",
 		},
 		{
 			ID: "MAGENTO-002", Category: CategoryMagento, Severity: SeverityMedium,
@@ -514,7 +476,7 @@ func getMagentoRules() []Rule {
 			ID: "MAGENTO-008", Category: CategoryMagento, Severity: SeverityHigh,
 			Description: "Cron job backdoor pattern",
 			Regex:       `(?:shell_exec|system|exec|passthru|popen|proc_open)\s*\(.*?crontab|crontab\s+-[elr]|/etc/cron\.\w+/`, IsRegex: true,
-			ExcludePaths: []string{"*/Cron/Model/Config/*", "*/crontab.xml"},
+			ExcludePaths: []string{"*/Cron/Model/*", "*/crontab.xml", "*/Setup/Install*"},
 		},
 		{
 			ID: "MAGENTO-009", Category: CategoryMagento, Severity: SeverityHigh,
@@ -555,6 +517,64 @@ func getMagentoRules() []Rule {
 			ID: "MAGENTO-016", Category: CategoryMagento, Severity: SeverityCritical,
 			Description: "Backdoor loader via Magento registration.php",
 			Regex:       `registration\.php.*include_once.*License\.php|registration\.php.*LicenseApi`, IsRegex: true,
+		},
+		{
+			ID: "MAGENTO-017", Category: CategoryMagento, Severity: SeverityCritical,
+			Description: "CVE-2025-54236 SessionReaper deserialization backdoor",
+			Regex:       `(?i)GuzzleHttp\\Cookie\\FileCookieJar|Monolog\\Handler\\SyslogUdpHandler.*unserialize`,
+			IsRegex: true,
+			ExcludePaths: []string{"*/vendor/guzzlehttp/*", "*/vendor/monolog/*"},
+		},
+		{
+			ID: "MAGENTO-018", Category: CategoryWebShell, Severity: SeverityCritical,
+			Description: "SessionReaper backdoor execution marker",
+			Pattern:     "echo '409723*20'",
+		},
+		{
+			ID: "MAGENTO-019", Category: CategoryWebShell, Severity: SeverityCritical,
+			Description: "PHP code execution in session file",
+			Regex:       `(?i)sess_[a-f0-9]{26,}.*<\?php|<\?php.*\$_(?:REQUEST|POST|GET)\[`,
+			IsRegex: true,
+			ExcludePaths: []string{"*/vendor/*", "*/test/*"},
+		},
+		{
+			ID: "MAGENTO-020", Category: CategoryMagento, Severity: SeverityCritical,
+			Description: "CVE-2024-34102 CosmicSting XXE/SSRF payload",
+			Regex:       `(?i)LIBXML_NOENT|LIBXML_DTDLOAD|simplexml_load_string.*php://filter`,
+			IsRegex: true,
+			ExcludePaths: []string{"*/vendor/magento/framework/Xml/*", "*/lib/internal/*"},
+		},
+		{
+			ID: "MAGENTO-021", Category: CategoryWebShell, Severity: SeverityCritical,
+			Description: "CosmicSting iconv-based RCE chain indicator",
+			Regex:       `(?i)php://filter/convert\.iconv\.|CNS_11643.*UTF-32`,
+			IsRegex: true,
+		},
+		{
+			ID: "SUPPLY-001", Category: CategoryWebShell, Severity: SeverityCritical,
+			Description: "Supply chain backdoor SECURE_KEY signature (Sansec May 2025)",
+			Regex:       `(?i)const\s+(?:SECURE_KEY|SIGN_KEY)\s*=\s*['"][a-f0-9]{32,}['"]`,
+			IsRegex: true,
+			ExcludePaths: []string{"*/vendor/magento/*"},
+		},
+	}
+}
+
+// =============================================================================
+// Category 5: Miscellaneous Security Issues
+// These detect general security misconfigurations and exposed sensitive files
+// that are not specific to any malware family.
+// =============================================================================
+
+func getMiscRules() []Rule {
+	return []Rule{
+		{
+			ID:          "MISC-001",
+			Category:    CategoryMisc,
+			Severity:    SeverityHigh,
+			Description: "Exposed .git directory — potential source code/credential leak",
+			Regex:       `(?i)\.git/(?:HEAD|config|index|objects/|refs/|logs/)`,
+			IsRegex:     true,
 		},
 	}
 }

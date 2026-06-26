@@ -32,6 +32,7 @@ func main() {
 	output := flag.String("output", "", "Export full scan results to file (JSON format)")
 	debugMode := flag.Bool("debug", false, "Enable debug logging to file")
 	scanVendor := flag.Bool("scan-vendor", false, "Include vendor, test, and third-party directories in scan")
+	dbQueryTimeout := flag.Int("db-query-timeout", 30, "Per-query timeout in seconds for database scanning")
 	flag.Parse()
 
 	// Set up debug logging
@@ -128,7 +129,7 @@ func main() {
 			)
 			if connErr == nil {
 				defer conn.Close()
-				inspector := database.NewInspector(conn, dbProgressCh)
+				inspector := database.NewInspector(conn, dbProgressCh, time.Duration(*dbQueryTimeout)*time.Second)
 				dbResults, scanErr := inspector.Scan(ctx)
 				dbFindings = dbResults
 				if scanErr != nil {

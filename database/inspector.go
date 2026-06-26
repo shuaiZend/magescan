@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"time"
 )
 
 // DBFinding represents a threat found in the database.
@@ -47,7 +48,7 @@ var dbPatterns = []dbPattern{
 	{regexp.MustCompile(`(?i)\bonload\s*="`), nil, "Onload event handler injection", "Medium"},
 	{regexp.MustCompile(`(?i)\bonerror\s*="`), nil, "Onerror event handler injection", "Medium"},
 	{regexp.MustCompile(`(?i)<link[^>]*href\s*=\s*['"]https?://`), regexp.MustCompile(`(?i)(?:googleapis|gstatic|cloudflare|jquery|bootstrapcdn)`), "Suspicious external resource", "Medium"},
-	{regexp.MustCompile(`(?:\.ru|\.cn|\.tk|\.pw|\.top|\.xyz|\.club|\.work|\.buzz)/`), nil, "Suspicious TLD in content", "Medium"},
+	{regexp.MustCompile(`(?:\.ru|\.cn|\.tk|\.pw|\.top|\.xyz|\.club|\.work|\.buzz)/`), regexp.MustCompile(`(?i)(?:yandex|baidu|alibaba|alicdn|alipay|tencent)`), "Suspicious TLD in content", "Medium"},
 	// JS Shell / Magecart patterns from Sansec threat intelligence
 	{regexp.MustCompile(`(?i)<script[^>]*>\s*var\s+\w+\s*=\s*['"]`), nil, "Inline script with variable assignment (potential skimmer)", "High"},
 	{regexp.MustCompile(`(?i)<script[^>]*>.*(?:createElement|appendChild|insertBefore)`), nil, "DOM manipulation in inline script", "High"},
@@ -73,7 +74,19 @@ var dbPatterns = []dbPattern{
 	{regexp.MustCompile(`(?i)btoa\s*\(.*(?:JSON\.stringify|serialize|encodeURI)`), nil, "Data serialization with base64 encoding", "High"},
 	{regexp.MustCompile(`(?i)wss?://[a-z0-9.-]+/(?:common|ws|socket)`), nil, "WebSocket C2 connection", "Critical"},
 	{regexp.MustCompile(`(?i)<script[^>]*>\s*var\s+\w+\s*=\s*['"][a-z0-9]{200,}`), nil, "Script tag with long encoded payload (likely skimmer)", "Critical"},
-	{regexp.MustCompile(`(?i)<script[^>]*>[^<]{500,}`), nil, "Script tag with large inline content (potential obfuscated malware)", "High"},
+	{regexp.MustCompile(`(?i)<script[^>]*>[^<]{2000,}`), nil, "Script tag with large inline content (potential obfuscated malware)", "High"},
+	// CVE-2025-54236 SessionReaper deserialization payload
+	{regexp.MustCompile(`(?i)GuzzleHttp.*FileCookieJar|Monolog.*SyslogUdp.*unserialize`), nil,
+		"SessionReaper deserialization payload in content (CVE-2025-54236)", "Critical"},
+	// CosmicSting XXE/iconv payload residual
+	{regexp.MustCompile(`(?i)LIBXML_NOENT|php://filter/convert\.iconv`), nil,
+		"CosmicSting XXE/iconv payload residual (CVE-2024-34102)", "Critical"},
+	// Service Worker injection in CMS content
+	{regexp.MustCompile(`(?i)serviceWorker\.register\s*\(`), nil,
+		"Service Worker registration in CMS content (Magecart 2025)", "Critical"},
+	// Known active C2 domains (2025 Sansec IOC)
+	{regexp.MustCompile(`(?i)(?:sagecrafft\.com|worcksbot\.com|tecnokauf\.ru|cloudflare-stat\.net)`), nil,
+		"Known active C2 domain (2025 Sansec IOC)", "Critical"},
 }
 
 // sensitivePaths are core_config_data paths that are commonly targeted by attackers.
@@ -120,17 +133,23 @@ var sensitivePaths = []string{
 
 // Inspector performs security scans on the Magento database.
 type Inspector struct {
-	conn       *Connector
-	progressCh chan DBProgress
-	findings   []DBFinding
+	conn         *Connector
+	progressCh   chan DBProgress
+	findings     []DBFinding
+	queryTimeout time.Duration
 }
 
 // NewInspector creates a new database security inspector.
-func NewInspector(conn *Connector, progressCh chan DBProgress) *Inspector {
+// queryTimeout controls the per-query timeout (default 30s if zero).
+func NewInspector(conn *Connector, progressCh chan DBProgress, queryTimeout time.Duration) *Inspector {
+	if queryTimeout <= 0 {
+		queryTimeout = 30 * time.Second
+	}
 	return &Inspector{
-		conn:       conn,
-		progressCh: progressCh,
-		findings:   make([]DBFinding, 0),
+		conn:         conn,
+		progressCh:   progressCh,
+		findings:     make([]DBFinding, 0),
+		queryTimeout: queryTimeout,
 	}
 }
 
@@ -208,14 +227,25 @@ func (i *Inspector) scanCoreConfigData(ctx context.Context) error {
 		tableName, strings.Join(placeholders, ","),
 	)
 
-	rows, err := i.conn.db.QueryContext(ctx, query, args...)
+	scanCtx, cancel := context.WithTimeout(ctx, i.queryTimeout)
+	defer cancel()
+	rows, err := i.conn.db.QueryContext(scanCtx, query, args...)
 	if err != nil {
 		return err
 	}
 	defer rows.Close()
 
 	var scanned, threats int64
+	var rowCount int
 	for rows.Next() {
+		rowCount++
+		if rowCount%1000 == 0 {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			default:
+			}
+		}
 		var configID int64
 		var path string
 		var value sql.NullString
@@ -266,14 +296,25 @@ func (i *Inspector) scanCMSBlocks(ctx context.Context) error {
 	tableName := i.conn.TableName("cms_block")
 	query := fmt.Sprintf("SELECT block_id, identifier, content FROM %s", tableName)
 
-	rows, err := i.conn.db.QueryContext(ctx, query)
+	scanCtx, cancel := context.WithTimeout(ctx, i.queryTimeout)
+	defer cancel()
+	rows, err := i.conn.db.QueryContext(scanCtx, query)
 	if err != nil {
 		return err
 	}
 	defer rows.Close()
 
 	var scanned, threats int64
+	var rowCount int
 	for rows.Next() {
+		rowCount++
+		if rowCount%1000 == 0 {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			default:
+			}
+		}
 		var blockID int64
 		var identifier string
 		var content sql.NullString
@@ -321,14 +362,25 @@ func (i *Inspector) scanCMSPages(ctx context.Context) error {
 	tableName := i.conn.TableName("cms_page")
 	query := fmt.Sprintf("SELECT page_id, identifier, content FROM %s", tableName)
 
-	rows, err := i.conn.db.QueryContext(ctx, query)
+	scanCtx, cancel := context.WithTimeout(ctx, i.queryTimeout)
+	defer cancel()
+	rows, err := i.conn.db.QueryContext(scanCtx, query)
 	if err != nil {
 		return err
 	}
 	defer rows.Close()
 
 	var scanned, threats int64
+	var rowCount int
 	for rows.Next() {
+		rowCount++
+		if rowCount%1000 == 0 {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			default:
+			}
+		}
 		var pageID int64
 		var identifier string
 		var content sql.NullString
@@ -376,14 +428,25 @@ func (i *Inspector) scanOrderStatusHistory(ctx context.Context) error {
 	tableName := i.conn.TableName("sales_order_status_history")
 	query := fmt.Sprintf("SELECT entity_id, comment FROM %s ORDER BY entity_id DESC LIMIT 1000", tableName)
 
-	rows, err := i.conn.db.QueryContext(ctx, query)
+	scanCtx, cancel := context.WithTimeout(ctx, i.queryTimeout)
+	defer cancel()
+	rows, err := i.conn.db.QueryContext(scanCtx, query)
 	if err != nil {
 		return err
 	}
 	defer rows.Close()
 
 	var scanned, threats int64
+	var rowCount int
 	for rows.Next() {
+		rowCount++
+		if rowCount%1000 == 0 {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			default:
+			}
+		}
 		var entityID int64
 		var comment sql.NullString
 
@@ -447,14 +510,25 @@ func (i *Inspector) scanEmailTemplates(ctx context.Context) error {
 	tableName := i.conn.TableName("email_template")
 	query := fmt.Sprintf("SELECT template_id, template_code, template_text FROM %s", tableName)
 
-	rows, err := i.conn.db.QueryContext(ctx, query)
+	scanCtx, cancel := context.WithTimeout(ctx, i.queryTimeout)
+	defer cancel()
+	rows, err := i.conn.db.QueryContext(scanCtx, query)
 	if err != nil {
 		return err
 	}
 	defer rows.Close()
 
 	var scanned, threats int64
+	var rowCount int
 	for rows.Next() {
+		rowCount++
+		if rowCount%1000 == 0 {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			default:
+			}
+		}
 		var templateID int64
 		var templateCode string
 		var content sql.NullString
@@ -502,14 +576,30 @@ func (i *Inspector) scanProductText(ctx context.Context) error {
 	tableName := i.conn.TableName("catalog_product_entity_text")
 	query := fmt.Sprintf("SELECT value_id, entity_id, value FROM %s WHERE value LIKE '%%<script%%' OR value LIKE '%%javascript:%%' OR value LIKE '%%eval(%%' OR value LIKE '%%document.write%%' OR value LIKE '%%onload=%%' OR value LIKE '%%onerror=%%'", tableName)
 
-	rows, err := i.conn.db.QueryContext(ctx, query)
+	// Large table: add sampling limit
+	if strings.Contains(tableName, "catalog_product") || strings.Contains(tableName, "layout_update") {
+		query += " LIMIT 50000"
+	}
+
+	scanCtx, cancel := context.WithTimeout(ctx, i.queryTimeout)
+	defer cancel()
+	rows, err := i.conn.db.QueryContext(scanCtx, query)
 	if err != nil {
 		return err
 	}
 	defer rows.Close()
 
 	var scanned, threats int64
+	var rowCount int
 	for rows.Next() {
+		rowCount++
+		if rowCount%1000 == 0 {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			default:
+			}
+		}
 		var valueID, entityID int64
 		var content sql.NullString
 
@@ -556,14 +646,30 @@ func (i *Inspector) scanLayoutUpdates(ctx context.Context) error {
 	tableName := i.conn.TableName("layout_update")
 	query := fmt.Sprintf("SELECT layout_update_id, handle, xml FROM %s WHERE xml LIKE '%%<script%%' OR xml LIKE '%%javascript%%' OR xml LIKE '%%onload%%' OR xml LIKE '%%<referenceBlock%%'", tableName)
 
-	rows, err := i.conn.db.QueryContext(ctx, query)
+	// Large table: add sampling limit
+	if strings.Contains(tableName, "catalog_product") || strings.Contains(tableName, "layout_update") {
+		query += " LIMIT 50000"
+	}
+
+	scanCtx, cancel := context.WithTimeout(ctx, i.queryTimeout)
+	defer cancel()
+	rows, err := i.conn.db.QueryContext(scanCtx, query)
 	if err != nil {
 		return err
 	}
 	defer rows.Close()
 
 	var scanned, threats int64
+	var rowCount int
 	for rows.Next() {
+		rowCount++
+		if rowCount%1000 == 0 {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			default:
+			}
+		}
 		var updateID int64
 		var handle string
 		var xml sql.NullString
@@ -616,13 +722,16 @@ func (i *Inspector) scanSalesOrderAddress(ctx context.Context) error {
 		tableName,
 	)
 
-	rows, err := i.conn.db.QueryContext(ctx, query)
+	scanCtx, cancel := context.WithTimeout(ctx, i.queryTimeout)
+	defer cancel()
+	rows, err := i.conn.db.QueryContext(scanCtx, query)
 	if err != nil {
 		return err
 	}
 	defer rows.Close()
 
 	var scanned, threats int64
+	var rowCount int
 	// Template injection patterns specific to CVE-2022-24086
 	templatePatterns := []*regexp.Regexp{
 		regexp.MustCompile(`\{\{.*var.*\}\}`),
@@ -633,6 +742,14 @@ func (i *Inspector) scanSalesOrderAddress(ctx context.Context) error {
 	}
 
 	for rows.Next() {
+		rowCount++
+		if rowCount%1000 == 0 {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			default:
+			}
+		}
 		var entityID int64
 		var vatID, company sql.NullString
 
@@ -687,7 +804,9 @@ func (i *Inspector) scanAdminUsers(ctx context.Context) error {
 	tableName := i.conn.TableName("admin_user")
 	query := fmt.Sprintf("SELECT user_id, username, email, created FROM %s", tableName)
 
-	rows, err := i.conn.db.QueryContext(ctx, query)
+	scanCtx, cancel := context.WithTimeout(ctx, i.queryTimeout)
+	defer cancel()
+	rows, err := i.conn.db.QueryContext(scanCtx, query)
 	if err != nil {
 		return err
 	}
@@ -705,6 +824,9 @@ func (i *Inspector) scanAdminUsers(ctx context.Context) error {
 		"akshaykamble@mail.com",
 		"welcome@domain.com",
 		"Consulting@mail.com",
+		"support_team@adobe-upd.com",          // SessionReaper campaign
+		"whmcs_admin@mail.mg",                 // 2025 supply chain
+		"customer_review@store-analytics.net",  // Magecart 2025
 	}
 
 	suspiciousPatterns := []*regexp.Regexp{
@@ -715,7 +837,16 @@ func (i *Inspector) scanAdminUsers(ctx context.Context) error {
 	}
 
 	var scanned, threats int64
+	var rowCount int
 	for rows.Next() {
+		rowCount++
+		if rowCount%1000 == 0 {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			default:
+			}
+		}
 		var userID int64
 		var username, email string
 		var created sql.NullString
