@@ -74,7 +74,7 @@ var dbPatterns = []dbPattern{
 	{regexp.MustCompile(`(?i)btoa\s*\(.*(?:JSON\.stringify|serialize|encodeURI)`), nil, "Data serialization with base64 encoding", "High"},
 	{regexp.MustCompile(`(?i)wss?://[a-z0-9.-]+/(?:common|ws|socket)`), nil, "WebSocket C2 connection", "Critical"},
 	{regexp.MustCompile(`(?i)<script[^>]*>\s*var\s+\w+\s*=\s*['"][a-z0-9]{200,}`), nil, "Script tag with long encoded payload (likely skimmer)", "Critical"},
-	{regexp.MustCompile(`(?i)<script[^>]*>[^<]{2000,100000}`), nil, "Script tag with large inline content (potential obfuscated malware)", "High"},
+	{regexp.MustCompile(`(?i)<script[^>]*>[^<]{500}[^<]{500}[^<]{500}[^<]{500}[^<]+`), nil, "Script tag with large inline content (potential obfuscated malware)", "High"},
 	// CVE-2025-54236 SessionReaper deserialization payload
 	{regexp.MustCompile(`(?i)GuzzleHttp.*FileCookieJar|Monolog.*SyslogUdp.*unserialize`), nil,
 		"SessionReaper deserialization payload in content (CVE-2025-54236)", "Critical"},

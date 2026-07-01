@@ -372,7 +372,7 @@ func getObfuscationRules() []Rule {
 		{
 			ID: "OBFUSC-001", Category: CategoryObfuscation, Severity: SeverityHigh,
 			Description: "Extremely long base64 encoded string (>2000 chars)",
-			Regex:       `[A-Za-z0-9+/=]{5000,}`, IsRegex: true,
+			Regex:       `[A-Za-z0-9+/=]{999}[A-Za-z0-9+/=]{999}[A-Za-z0-9+/=]{999}[A-Za-z0-9+/=]{999}[A-Za-z0-9+/=]{999}[A-Za-z0-9+/=]+`, IsRegex: true,
 		},
 		{
 			ID: "OBFUSC-002", Category: CategoryObfuscation, Severity: SeverityHigh,
